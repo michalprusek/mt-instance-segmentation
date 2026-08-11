@@ -82,6 +82,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/real/mt34_eval")
     ap.add_argument("--pred-dir", default="/home/prusek/mt_enc_exp/mt34_pred")
+    ap.add_argument("--pred-dir-2", default=None,
+                    help="a second foreground to add as a fifth panel (e.g. the gated retrain)")
+    ap.add_argument("--label", default="v4b")
+    ap.add_argument("--label-2", default="gated")
     ap.add_argument("--params-a", default="src/instance/params_a_v2.json")
     ap.add_argument("--params-a-model", default="src/instance/params_a_model_v2.json")
     ap.add_argument("--prob-thr", type=float, default=0.35)
@@ -118,10 +122,12 @@ def main() -> None:
         pls_o, _ = instance_a(chans_o.max(axis=0) > 0.5, KAPPA_MAX, pa,
                              channels=chans_o, prob=chans_o.max(axis=0))
 
-        # --- panel 4: the v4b predicted foreground (the real system) ---
-        npz = os.path.join(args.pred_dir, f"{name}.npz")
-        pls_m = []
-        if os.path.exists(npz):
+        # --- panels 4+: the predicted foreground(s) -- the real system ---
+        def on_prediction(pred_dir):
+            npz = os.path.join(pred_dir, f"{name}.npz")
+            if not os.path.exists(npz):
+                print(f"  {name}: no npz in {pred_dir}", flush=True)
+                return []
             chans_m = np.load(npz)["prob"].astype(np.float32)
             fv = zoom(fov_mask(fr["image"]).astype(np.uint8), UP, order=0).astype(bool)
             fv = np.pad(fv, ((0, max(0, hi[0] - fv.shape[0])),
@@ -129,19 +135,24 @@ def main() -> None:
                         constant_values=True)[:hi[0], :hi[1]]
             chans_m = chans_m * fv[None, :, :]
             thr = pam.get("prob_thr", args.prob_thr)
-            pls_m, _ = instance_a(chans_m.max(axis=0) > thr, KAPPA_MAX, pam,
-                                  channels=chans_m, prob=chans_m.max(axis=0))
-        else:
-            print(f"  {name}: no prediction npz, panel 4 will be empty", flush=True)
+            pls, _ = instance_a(chans_m.max(axis=0) > thr, KAPPA_MAX, pam,
+                                channels=chans_m, prob=chans_m.max(axis=0))
+            return pls
 
-        fig, axes = plt.subplots(1, 4, figsize=(26, 7))
+        preds = [(args.label, on_prediction(args.pred_dir))]
+        if args.pred_dir_2:
+            preds.append((args.label_2, on_prediction(args.pred_dir_2)))
+
+        n_panels = 3 + len(preds)
+        fig, axes = plt.subplots(1, n_panels, figsize=(6.5 * n_panels, 7))
         draw(axes[0], img01, [], f"{name}\nimage ({a.get('source_task')})")
         draw(axes[1], img01, gt, f"ground truth -- {len(gt)} microtubules")
         draw(axes[2], img01, pls_o,
              f"A on ORACLE foreground -- {len(pls_o)} inst, F1={f1(pls_o, gt, hi):.3f}")
-        draw(axes[3], img01, pls_m,
-             f"A on v4b foreground -- {len(pls_m)} inst, F1={f1(pls_m, gt, hi):.3f}"
-             if pls_m else "A on v4b foreground -- no prediction")
+        for k, (label, pls) in enumerate(preds):
+            draw(axes[3 + k], img01, pls,
+                 f"A on {label} foreground -- {len(pls)} inst, F1={f1(pls, gt, hi):.3f}"
+                 if pls else f"A on {label} foreground -- no prediction")
         fig.tight_layout()
         out = os.path.join(args.out_dir, f"{name}.png")
         fig.savefig(out, dpi=110, bbox_inches="tight", facecolor="white")

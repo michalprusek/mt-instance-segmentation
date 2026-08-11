@@ -811,6 +811,11 @@ space covered 9 keys and the rest fell back to the DEFAULTS *of the time*, and t
 itself changed in v2 (the displacement term and `gap_floor`). The repository is not under version
 control, so the v1 code is gone too.
 
+**Fixed 2026-08-11:** `tune_instancer.py` now takes `--tag` and treats params files as
+**write-once** — an existing file makes it exit rather than overwrite, and `--force` has to be
+asked for explicitly. The very next tuning run (§17q) would otherwise have overwritten
+`params_a_model.json` a second time.
+
 Consequences, stated plainly:
 - The **v1 → v2 delta (0.893 → 0.920) is not reproducible** and must not be presented as a
   measured improvement with an interval. The v2 numbers stand on their own; the delta is

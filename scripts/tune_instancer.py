@@ -199,6 +199,10 @@ def main() -> None:
     ap.add_argument("--tune-kappa", action="store_true",
                     help="ABLATION ONLY: let Optuna fit the curvature bound too")
     ap.add_argument("--out-dir", default="src/instance")
+    ap.add_argument("--tag", default=None,
+                    help="suffix for the params filename; use it instead of overwriting")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite an existing params file (see protocol 17n before you do)")
     ap.add_argument("--log", default="data/enc_sensitivity_testset/instancer_tuning")
     args = ap.parse_args()
 
@@ -236,8 +240,18 @@ def main() -> None:
 
     tag = (f"params_{args.method}"
            + ("_model" if args.masks == "model" else "")
-           + ("_kappatuned" if args.tune_kappa else ""))
+           + ("_kappatuned" if args.tune_kappa else "")
+           + (f"_{args.tag}" if args.tag else ""))
     out = os.path.join(args.out_dir, f"{tag}.json")
+
+    # Params files are WRITE-ONCE. This script used to overwrite in place, and a later tuning
+    # run silently replaced the parameters behind an already-published number -- so that
+    # number stopped being reproducible and nobody could tell (protocol 17n). Pass --tag to
+    # name a new file, or --force if you really mean to replace this one.
+    if os.path.exists(out) and not args.force:
+        raise SystemExit(
+            f"{out} already exists. Params files are write-once: pass --tag <name> to write a "
+            f"new file, or --force to overwrite deliberately.")
     with open(out, "w") as fh:
         json.dump(best, fh, indent=2)
     with open(os.path.join(args.log, f"study_{tag}_oracle_{args.split}.json"), "w") as fh:

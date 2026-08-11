@@ -148,6 +148,24 @@ def instance_polylines(channels: np.ndarray, params: dict, prob_thr: float):
     return polylines
 
 
+def display01(img: np.ndarray) -> np.ndarray:
+    """Display stretch from the CENTRAL crop — for the overlay only, never for the model.
+
+    Many IRM frames have a saturated bright surround outside an octagonal field stop. Whole
+    frame percentiles are then set by the surround and the imaged interior collapses to black,
+    which makes the overlay unreadable even when the prediction is perfect. The central 60 % is
+    inside the field stop for every frame we have seen.
+
+    The model keeps :func:`norm01` regardless: it was trained on that input distribution and
+    changing it would change the predictions, not just the picture.
+    """
+    img = np.asarray(img, dtype=np.float64)
+    h, w = img.shape[:2]
+    core = img[int(h * 0.2):int(h * 0.8), int(w * 0.2):int(w * 0.8)]
+    lo, hi = np.percentile(core, [1.0, 99.0])
+    return np.clip((img - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+
+
 def save_overlay(path: str, img01: np.ndarray, polylines) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -208,7 +226,9 @@ def main() -> None:
                        "coordinate_order": "x=col, y=row, in original image pixels",
                        "polylines": out}, fh)
         if args.overlay:
-            save_overlay(os.path.join(args.out_dir, f"{name}.png"), img01, polylines)
+            save_overlay(os.path.join(args.out_dir, f"{name}.png"),
+                         zoom(display01(raw), UP, order=1)[:img01.shape[0], :img01.shape[1]],
+                         polylines)
         print(f"  {name}: {len(out)} instances  ({time.time() - t0:.1f}s)", flush=True)
 
     print(f"wrote {args.out_dir}/", flush=True)

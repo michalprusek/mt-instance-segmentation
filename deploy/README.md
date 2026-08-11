@@ -12,19 +12,41 @@ fitted on synthetic data with exact ground truth.
 
 ## Quick start
 
+**On this host — verified working, copy-paste as is.** It reuses the ML service's container
+image but starts a *separate* throwaway container, so the running `spheroseg-ml` service is
+never touched:
+
+```bash
+cd /home/cvat/cell-segmentation-hub
+docker run --rm --gpus all \
+    -v /home/cvat/cell-segmentation-hub/mt-instance-seg:/pkg \
+    cell-segmentation-hub-ml \
+    python /pkg/predict.py --input /pkg/sample --out-dir /pkg/sample_out --overlay
+```
+
+That command was run on 2026-08-11 against the bundled sample frame and produced 84 instances
+in 9.8 s on the RTX A5000. Point `--input` at any directory of `.tif` files; to read from the
+service's upload area, add `-v /home/cvat/cell-segmentation-hub/backend/uploads/blue:/uploads`
+and use `--input /uploads/...`.
+
+> `docker exec spheroseg-ml ...` does **not** work: the running service container has no mount
+> for this directory. Either use the `docker run` form above, or add a volume mount for
+> `mt-instance-seg` to `docker-compose.production.yml` if you want it inside the live service.
+
+**Anywhere else:**
+
 ```bash
 python predict.py --input frame.tif --out-dir results/ --overlay
 python predict.py --input folder_of_tifs/ --out-dir results/
 ```
 
-On the `spheroseg-ml` container (which already has every dependency, see below):
+Roughly **4–10 s per 1024² frame on a GPU** (4 s on an A100-class card, 10 s on the A5000);
+it runs on CPU too, considerably slower.
 
-```bash
-docker exec -it spheroseg-ml python /app/mt-instance-seg/predict.py \
-    --input /app/uploads/<your_frame>.tif --out-dir /app/uploads/mt_results
-```
-
-Roughly **3–5 s per 1024² frame on a GPU**; it runs on CPU too, considerably slower.
+> Instance counts can differ by about one between machines — the same frame gives 83 on the
+> development GPU and 84 here. This is ordinary floating-point nondeterminism across GPU and
+> torch versions reaching a threshold decision, not a configuration problem. Weights and
+> parameters are identical (checksum-verified).
 
 ### Output
 
@@ -69,7 +91,11 @@ model/hub/                     vendored DINOv2 repo, so torch.hub never contacts
 weights/dino_seg_ori_v4b.pth   1.2 GB — full state_dict, frozen backbone included
 params/params_a_model_synthtuned.json   the instancer's 17 fitted hyperparameters
 instance/                      the instancer (pure numpy/scipy/skimage/networkx, no weights)
+sample/training_img_114.tif    one real annotated frame, so the quick start runs immediately
 ```
+
+The directory carries its own `.gitignore` containing `*`, so it stays out of the
+cell-segmentation-hub repository's status without anyone editing that repository's files.
 
 ### How it works
 

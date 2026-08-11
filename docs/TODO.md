@@ -89,14 +89,25 @@ over-firing clean 0.6–0.7×; semantic tol2 **0.947** (val/test 6/6 split). For
       all three improve monotonically under dilation (raw `fg` itself ranks 0.75!), so selection is
       bounded by an over-firing ceiling (fg ≤ 3× in-domain synth) and a collapse floor (rec2 ≥ 0.90).
       13 tests incl. a `(x=col,y=row)` transpose regression. **Gate any foreground retrain on this.**
-- [~] 🔴 **Foreground RETRAIN gated on `fg_quality` — RUNNING on tulen (2026-08-11).** `scripts/train_gated.py`:
-      `dino_seg.py` had **no validation at all** (N epochs → overwrite one path with the final weights), so
-      "which checkpoint" was never a decision the project could make. Adds per-epoch checkpoints (trainable
-      params only — `requires_grad=False` does NOT keep the frozen ViT-L out of `state_dict()`, so a naive
-      save is 1.23 GB × 16 onto the NFS home), a VAL pass, and constrained selection. Records the
-      counterfactual (last-epoch / best-coverage-F1 picks) so the selection-rule comparison needs no retrain.
-      Gate path validated against v4b (§17o): prec2 0.735 vs 0.728, rec2 0.975 vs 0.971. **v4b's VAL
-      continuity score 0.841 is the bar.** `fg_empty` = 0.000 % — v4b fires nothing on the empty field.
+- [x] 🔴 **Foreground RETRAIN gated on `fg_quality` — DONE, NEGATIVE (§17p).** 30 epochs, v4b recipe,
+      selection on real VAL. The gate's own metric improved 25 % (continuity 0.841 → 0.634; `cc_per_gt`
+      7.86 → 3.71, `endp_per_kpx` 21.0 → 14.9) and **downstream F1 did not move**: TEST 0.416 → 0.393,
+      −0.023 [−0.061, +0.013], p=0.230. Two effects DO survive on the crossing-dense half — false
+      positives **404 → 327** (−77 [−116,−43], p<0.001, visibly the field-stop firing gone) and
+      fragmentation **significantly WORSE** (1.182 → 1.293, +0.111 [+0.018,+0.239], p=0.006); they cancel.
+      Junction identity +0.113 and bundle recovery +0.109 looked like headlines and are NOT separable
+      from noise at n=11 — the intervals earned their keep. **Mechanism: the proxy moved without the
+      target.** `cc_per_gt` counts mask components; `fragmentation` counts predicted instances — the mask
+      got more connected while the instancer still cut it into more pieces. **Scope correction: the
+      0.79–0.82 ranking accuracy was measured ACROSS four foregrounds and does NOT transfer to selecting
+      checkpoints WITHIN one training run.** Also measured: coverage F1 spans only 0.825–0.873 across the
+      15 checkpoints while continuity spans 0.634–1.289 — but both rules picked epoch 28, so the gate's
+      marginal value over coverage F1 was untestable here. **DECISION: v4b stays primary.**
+- [ ] **Next lever for the foreground is NOT another gated retrain.** The two things that actually moved
+      are opposed, so the target is explicit: cut false positives further WITHOUT adding fragmentation.
+      Candidates worth costing: a connectivity-aware loss (soft-clDice weight was 0.1 — the run that
+      collapsed at 0.5 was with the OLD recipe), and training-time field-stop augmentation, since the
+      measured FP win came from the rim rather than from filaments.
 - [~] **Uncertainty on every head-to-head number (§17m).** `instance.metrics.paired_bootstrap` /
       `bootstrap_ci`: frame-resampling CIs, **paired** (one frame multiset scored by both methods, CI on
       the difference — two marginal intervals overlap for almost any pair at n=17) and **stratified by

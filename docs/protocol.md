@@ -855,3 +855,73 @@ Two things fell out of the check:
 The smoke run also confirmed the failure path end to end: after one epoch the decoder predicts
 nothing, `foreground_quality` returns `None` for every frame, and `select_checkpoint` refuses to
 select rather than shipping the least-bad collapse.
+
+## 17p. The gated foreground retrain — a negative result (2026-08-11)
+
+30 epochs, online synthetic generation, the v4b recipe unchanged (`SEG_MODE=ori`, `MASK_HW=1.0`,
+`POS_W=8`, `CLDICE_W=0.1`). Validation every 2 epochs on the real MT-34 VAL split, selection by
+`fg_quality.select_checkpoint`. This is the first time the project has selected a checkpoint at
+all: `dino_seg.py` runs N epochs and overwrites one path with the final weights.
+
+### What the training curve showed
+
+**Coverage F1 barely distinguishes checkpoints.** Across the 15 validated epochs it spans
+0.825–0.873 — a 5.8 % relative range — while the continuity score spans 0.634–1.289, a 103 %
+range. The metric the segmenter has always been selected on is nearly flat over exactly the
+choice it would be making. That is §17k's finding reproduced *within* a single training run,
+not across models.
+
+**But on this run the two rules agreed.** Both `argmin` continuity and `argmax` coverage F1
+picked epoch 28, so the gate's marginal value *over coverage F1* was untestable here. What it
+did change is the actual prior practice — shipping the last epoch — which would have taken
+epoch 30 at continuity 0.781 instead of epoch 28 at 0.634.
+
+The selected model is genuinely more continuous than v4b by the gate's own measure:
+`cc_per_gt` 7.86 → **3.71**, `endp_per_kpx` 21.0 → **14.9**, `prec2` 0.735 → 0.793, at
+`fg` 1.95 % (v4b 2.04 %) and `fg_empty` 0.00 %. Continuity score **0.634 vs 0.841**, a 25 %
+improvement.
+
+### What happened downstream: nothing good
+
+| split | v4b | gated | paired difference | p |
+|---|---|---|---|---|
+| VAL (17 frames) | 0.441 | 0.409 | −0.031 [−0.070, +0.008] | 0.123 |
+| **TEST (17 frames, scored once)** | **0.416** | **0.393** | −0.023 [−0.061, +0.013] | 0.230 |
+| TEST · Alice (6) | 0.692 | 0.614 | −0.078 [−0.166, +0.008] | 0.080 |
+| TEST · new-22 (11) | 0.265 | 0.272 | +0.007 [−0.022, +0.039] | 0.670 |
+
+**A 25 % improvement in the gating metric produced no improvement in the target metric.**
+
+### Two effects that do survive their intervals, pulling opposite ways
+
+On the crossing-dense new-22 half:
+
+| diagnostic | v4b | gated | paired difference | p |
+|---|---|---|---|---|
+| false positives | 404 | **327** | **−77** [−116, −43] | **<0.001** |
+| fragmentation (instances per GT MT) | 1.182 | **1.293** | **+0.111** [+0.018, +0.239] | **0.006** |
+| junction identity | 0.500 | 0.613 | +0.113 [−0.066, +0.396] | 0.461 |
+| bundle recovery | 0.174 | 0.282 | +0.109 [−0.231, +0.519] | 0.562 |
+
+The false-positive drop is real and visible: `training_img_101` shows v4b firing along the
+octagonal field stop (17 instances, most of them rim artefacts) where the gated model fires
+almost nowhere (12 instances, clean rim). The junction-identity and bundle-recovery gains look
+large and are **not** distinguishable from noise at n = 11 — without the interval they would
+have been reported as a headline.
+
+### The mechanism, and why it matters for the gate's premise
+
+`cc_per_gt` — connected components of the **mask** per ground-truth microtubule — halved.
+`fragmentation` — predicted **instances** covering one ground-truth microtubule — got
+significantly *worse*. The mask became more connected while the instancer still cut it into
+more pieces. **The proxy moved without the target moving**, and the strict metric's 0.95
+coverage requirement means extra pieces cost recall roughly as fast as fewer false positives
+buy precision. The two cancel; F1 does not move.
+
+`fg_quality`'s 0.79–0.82 ranking accuracy was measured **across four different foregrounds**.
+This run tests something it was never validated for — ordering checkpoints *within one
+training trajectory* — and it does not transfer. The honest scope of the claim is therefore
+narrower than §17m implied.
+
+**Decision: v4b stays the primary foreground.** The retrain is kept as evidence, not shipped.
+The instancer numbers in §17n are unaffected.

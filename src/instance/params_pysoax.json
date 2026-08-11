@@ -1,0 +1,18 @@
+{
+  "min_snake_length": 16,
+  "grouping_distance": 14.003296507282165,
+  "direction_threshold": 0.47698539490951397,
+  "point_spacing": 2.2793624745770056,
+  "ridge_threshold": 0.11868102419613873,
+  "gaussian_std": 0.9976886456369265,
+  "alpha": 0.26794665556164976,
+  "beta": 0.19655878822613712,
+  "stretch_factor": 0.998,
+  "gamma": 4.597,
+  "external_factor": 1.918,
+  "max_iterations": 5000,
+  "change_threshold": 0.001,
+  "check_period": 100,
+  "orient_weight": 0.0,
+  "embed_weight": 0.0
+}

@@ -1,0 +1,12 @@
+{
+  "_comment": "RECOVERED from tune_a.log trial 107 (oracle VAL 0.9118) after params_a.json was overwritten in place by the v2 tuning run. These are the 9 keys v1's search space contained; every other key fell back to DEFAULTS *as they were at v1 time*, so this file does NOT reproduce v1's published TEST 0.893 under current code -- the cost function itself changed (the displacement term / gap_floor). Kept for provenance, not as a runnable v1.",
+  "merge_radius": 5.650985236852715,
+  "bridge_max_len": 18.12325701724278,
+  "window": 31.106335963445982,
+  "w_theta": 4.249937062529705,
+  "w_kappa": 18.98938004072569,
+  "w_gap": 0.04315531812757163,
+  "c_open": 2.496752324153743,
+  "min_length": 9.064914634482877,
+  "smooth_size": 13
+}

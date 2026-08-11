@@ -1,0 +1,40 @@
+=== re-tune A on ORACLE VAL (new levers in the space) ===
+--- BEST oracle-val mean F1 (a) = 0.9382
+=== re-tune A on MODEL VAL ===
+--- BEST oracle-val mean F1 (a) = 0.4405
+=== LEVER ABLATION on VAL ===
+
+=== instancer A lever ablation | oracle masks | VAL (17 frames) ===
+variant                         mean F1   micro  junction  bundle   frag
+FULL                              0.938   0.895     0.947   0.934   1.03
+-displacement (direct turn)       0.560   0.313     0.075   0.182   1.28
+-gap_link                         0.866   0.795     0.768   0.797   1.08
+-orientation                      0.928   0.876     0.945   0.906   1.03
+-all three                        0.560   0.313     0.075   0.182   1.28
+
+=== instancer A lever ablation | model masks | VAL (17 frames) ===
+variant                         mean F1   micro  junction  bundle   frag
+FULL                              0.441   0.400     0.648   0.379   1.15
+-displacement (direct turn)       0.252   0.176     0.151   0.000   1.36
+-gap_link                         0.384   0.330     0.493   0.147   1.22
+-orientation                      0.441   0.401     0.649   0.391   1.15
+-all three                        0.252   0.176     0.151   0.000   1.36
+=== TEST v2 (scored once) ===
+  task 585 (Alice, n=6, scored=6): F1=0.928 micro=0.927 TP=115 FP=8 FN=10 | junction-id=0.960 | frag=1.04 | bundle=0.889 | maxk=0.131 | inst/frame=20
+      junction-id by crossing angle: shallow<30deg 1.000 (n=5) | oblique30-60 1.000 (n=7) | steep>60deg 0.800 (n=5)
+  task 586 (new-22, n=11, scored=11): F1=0.916 micro=0.860 TP=320 FP=55 FN=49 | junction-id=0.965 | frag=1.07 | bundle=0.634 | maxk=0.246 | inst/frame=34
+      junction-id by crossing angle: shallow<30deg 0.924 (n=66) | oblique30-60 0.914 (n=139) | steep>60deg 0.933 (n=149)
+  POOLED: F1=0.920 micro=0.877 (scored 17/17 frames; zero-GT frames count in micro only)
+  task 585 (Alice, n=6, scored=6): F1=0.692 micro=0.679 TP=90 FP=50 FN=35 | junction-id=0.660 | frag=1.09 | bundle=0.611 | maxk=0.242 | inst/frame=23
+      junction-id by crossing angle: shallow<30deg 0.800 (n=5) | oblique30-60 0.857 (n=7) | steep>60deg 0.600 (n=5)
+  task 586 (new-22, n=11, scored=11): F1=0.265 micro=0.369 TP=175 FP=404 FN=194 | junction-id=0.500 | frag=1.18 | bundle=0.174 | maxk=0.249 | inst/frame=53
+      junction-id by crossing angle: shallow<30deg 0.470 (n=66) | oblique30-60 0.568 (n=139) | steep>60deg 0.591 (n=149)
+  POOLED: F1=0.416 micro=0.437 (scored 17/17 frames; zero-GT frames count in micro only)
+  polarity dark   (n=8): F1=0.544 micro-recall=0.697
+  polarity bright (n=9): F1=0.302 micro-recall=0.478
+  task synth (new-22, n=20, scored=20): F1=0.710 micro=0.670 TP=156 FP=83 FN=71 | junction-id=0.856 | frag=1.24 | bundle=0.332 | maxk=0.242 | inst/frame=12
+      junction-id by crossing angle: shallow<30deg 0.767 (n=60) | oblique30-60 0.788 (n=52) | steep>60deg 0.851 (n=47)
+  POOLED: F1=0.710 micro=0.670 (scored 20/20 frames; zero-GT frames count in micro only)
+  task synth (new-22, n=20, scored=20): F1=0.183 micro=0.175 TP=43 FP=221 FN=184 | junction-id=0.451 | frag=1.20 | bundle=0.075 | maxk=0.241 | inst/frame=13
+  POOLED: F1=0.183 micro=0.175 (scored 20/20 frames; zero-GT frames count in micro only)
+V2_DONE

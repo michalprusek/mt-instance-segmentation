@@ -1,0 +1,20 @@
+# data & models (large; keep out of git)
+data/
+models/
+synth/*.h5
+synth/**/*.h5
+*.tif
+*.h5
+*.pth
+*.pt
+*.npz
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# os
+.DS_Store

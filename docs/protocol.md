@@ -930,3 +930,72 @@ narrower than §17m implied.
 
 **Decision: v4b stays the primary foreground.** The retrain is kept as evidence, not shipped.
 The instancer numbers in §17n are unaffected.
+
+## 17q. Removing the last real annotations — and getting a better system (2026-08-11)
+
+The pipeline was described as annotation-free. That was true of the semantic model, which
+never sees a human label, and **false of the instancer**: its 17 hyperparameters were fitted
+by Optuna against human polylines on the real MT-34 VAL split. The weakest sentence in the
+paper, and the easy fix was never tried.
+
+Same 17 knobs, same 100-trial budget at `n_jobs 12`, fitted instead on **synthetic VAL** —
+20 frames whose ground truth is exact and free, because the centerlines *are* the objects the
+generator drew. Then MT-34 TEST, scored once, paired against the real-VAL-tuned parameters on
+the same 17 frames.
+
+| split | real-VAL-tuned | synth-tuned | paired difference | p |
+|---|---|---|---|---|
+| MT-34 VAL | 0.441 | 0.466 | — (development check) | — |
+| **MT-34 TEST pooled** | **0.416** | **0.457** | **+0.041** [+0.018, +0.065] | **<0.001** |
+| TEST · Alice (6) | 0.692 | 0.695 | +0.003 [−0.022, +0.029] | 0.855 |
+| TEST · new-22 (11) | 0.265 | **0.327** | **+0.062** [+0.029, +0.095] | **<0.001** |
+
+**Parameters fitted without a single human annotation beat parameters fitted directly on the
+real validation split** — including on that split itself (0.466 vs 0.441). The gain is entirely
+on the crossing-dense half; Alice is flat.
+
+### Why, and why it is not a fluke
+
+Unlike §17p's retrain, both error modes improve at once. On new-22:
+
+| diagnostic | real-VAL-tuned | synth-tuned | paired difference | p |
+|---|---|---|---|---|
+| false positives | 404 | **326** | **−78** [−120, −41] | **<0.001** |
+| fragmentation | 1.182 | **1.145** | **−0.037** [−0.087, −0.002] | **0.028** |
+| false negatives | 194 | 182 | −12 [−30, +4] | 0.168 |
+| junction identity | 0.500 | 0.537 | +0.038 [−0.014, +0.091] | 0.149 |
+
+§17p cut false positives by an almost identical 77 and paid for it with *more* fragmentation,
+so F1 did not move. Here the same-sized FP cut comes with *less* fragmentation, and F1 moves.
+
+The parameters say what changed:
+
+| knob | real-VAL | synth | direction |
+|---|---|---|---|
+| `w_kappa` | 8.99 | **16.11** | trust the curvature physics nearly twice as much |
+| `min_length` | 33.8 | **44.7** | discard short fragments far more aggressively |
+| `window` | 20.2 | **28.4** | fit tangents over a longer, more stable baseline |
+| `smooth_size` | 7 | 11 | more smoothing |
+| `bridge_max_len` | 30.4 | 11.5 | absorb only genuinely short crossing bridges |
+
+Every one of those is a move toward being **more conservative about what counts as a
+microtubule** and **more committed to the physical constraint**. That is what exact ground
+truth rewards. Human ground truth cannot reward it: MT-34's annotations are human-corrected
+model output and are demonstrably incomplete on sparse frames, so a tuner scored against them
+is pushed to be permissive in order to recover filaments the annotator drew — and permissive
+settings manufacture false positives everywhere else. **Tuning on real VAL was not just
+unnecessary, it was actively fitting the annotation noise.**
+
+### Consequences
+
+- **The pipeline is now annotation-free end to end.** No human label enters training or tuning
+  at any stage. This is the claim the project wanted and could not previously make.
+- The shipped configuration changes to `params_a_model_synthtuned.json`; MT-34 TEST on the
+  predicted foreground is **0.457**, up from 0.416.
+- The instancer's *oracle-mask* parameters (`params_a_v2.json`) are still real-VAL-tuned. That
+  path is a diagnostic ceiling rather than the shipped system, but the same treatment is owed
+  before the oracle numbers go in a paper.
+- Multiplicity, stated honestly: this session scored MT-34 TEST several times (v1/v2
+  re-instrumentation, the gated retrain, this). Each comparison was declared before it ran and
+  each is reported with its interval, but the accumulated exposure is real and belongs in any
+  write-up.

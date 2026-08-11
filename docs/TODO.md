@@ -103,6 +103,21 @@ over-firing clean 0.6–0.7×; semantic tol2 **0.947** (val/test 6/6 split). For
       checkpoints WITHIN one training run.** Also measured: coverage F1 spans only 0.825–0.873 across the
       15 checkpoints while continuity spans 0.634–1.289 — but both rules picked epoch 28, so the gate's
       marginal value over coverage F1 was untestable here. **DECISION: v4b stays primary.**
+- [x] 🔴 **ANNOTATION-FREE END TO END — the instancer's hyperparameters no longer need real GT (§17q).**
+      The 17 knobs were fitted on human polylines (MT-34 real VAL); refitted on SYNTHETIC VAL at the
+      same 100-trial budget they **beat** the real-tuned ones: TEST pooled **0.416 → 0.457**,
+      +0.041 [+0.018,+0.065] p<0.001; crossing-dense half **0.265 → 0.327**, +0.062 [+0.029,+0.095].
+      Both error modes improve together (FP 404→326 p<0.001, fragmentation 1.182→1.145 p=0.028) —
+      unlike §17p, which traded them. Mechanism: exact GT rewards CONSERVATIVE settings (`w_kappa`
+      8.99→16.11, `min_length` 33.8→44.7, `window` 20.2→28.4); human GT is incomplete on sparse frames
+      so it rewards permissive ones, i.e. **real-VAL tuning was fitting annotation noise.**
+      SHIPPED CONFIG IS NOW `params_a_model_synthtuned.json`.
+- [ ] **Same treatment owed to the ORACLE-mask params** (`params_a_v2.json`, still real-VAL-tuned).
+      It is a diagnostic ceiling rather than the shipped system, but the 0.920 oracle number should
+      not go in a paper next to an annotation-free claim without it.
+- [ ] **TEST multiplicity.** This session scored MT-34 TEST four times (v1/v2 re-instrumentation,
+      gated retrain, synth-tuned). Each was declared before it ran and each carries its interval, but
+      the accumulated exposure belongs in the write-up.
 - [ ] **Next lever for the foreground is NOT another gated retrain.** The two things that actually moved
       are opposed, so the target is explicit: cut false positives further WITHOUT adding fragmentation.
       Candidates worth costing: a connectivity-aware loss (soft-clDice weight was 0.1 — the run that

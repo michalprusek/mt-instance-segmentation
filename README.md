@@ -56,11 +56,35 @@ are **paired, task-stratified bootstraps over frames**, 20 000 replicates.
 A and B's *marginal* intervals overlap; only the paired comparison separates them. This is why
 every head-to-head number here carries a paired interval — see `docs/protocol.md §17m`.
 
-On the predicted (not oracle) foreground A scores 0.416 and B 0.308, a difference of +0.108
-[+0.063, +0.160] — **the ranking of the instancers does not depend on foreground quality**,
-even though both absolute scores more than halve.
+On the predicted (not oracle) foreground A scores 0.457 and B 0.308 — **the ranking of the
+instancers does not depend on foreground quality**, even though both absolute scores roughly
+halve.
 
 PySOAX's output reaches 0.512 rad/px of curvature: physically impossible filaments.
+
+## No human annotation enters the pipeline at any stage
+
+The semantic model trains only on synthetic frames. The instancer has no learned weights at
+all — it is a geometric algorithm with 17 hyperparameters — and those hyperparameters are
+fitted on **synthetic** data, where ground truth is exact and free because the centerlines
+*are* the objects the generator drew.
+
+Fitting them on the real validation split instead is not merely unnecessary, it is worse:
+
+| | tuned on real VAL | tuned on synthetic | paired difference | p |
+|---|---|---|---|---|
+| MT-34 TEST pooled | 0.416 | **0.457** | +0.041 [+0.018, +0.065] | <0.001 |
+| TEST · crossing-dense half | 0.265 | **0.327** | +0.062 [+0.029, +0.095] | <0.001 |
+| false positives (that half) | 404 | **326** | −78 [−120, −41] | <0.001 |
+| fragmentation (that half) | 1.182 | **1.145** | −0.037 [−0.087, −0.002] | 0.028 |
+
+The synthetic-fitted configuration weights the curvature constraint nearly twice as heavily
+(`w_kappa` 8.99 → 16.11), discards short fragments far more aggressively (`min_length`
+33.8 → 44.7) and fits tangents over a longer baseline — it is uniformly *more conservative
+about what counts as a microtubule*. Human ground truth cannot reward that: these annotations
+are human-corrected model output and are incomplete on sparse frames, so a tuner scored
+against them is pushed to be permissive in order to recover filaments the annotator drew, and
+permissive settings manufacture false positives everywhere else.
 
 ## The open problem is the foreground, and it is not the domain gap
 

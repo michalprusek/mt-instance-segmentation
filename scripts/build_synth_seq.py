@@ -40,7 +40,12 @@ sys.path.insert(0, os.path.join(_ROOT, "synth"))
 from mt_bench.cvat_import import write_frame_h5  # noqa: E402
 from mt_sequence import MotionConfig, generate_sequence  # noqa: E402
 
-BG_DIR = "/home/prusek/BIOCEV/datasets/microtubules/IRM_backgrounds_v2"
+#: Same cross-machine fallback the trainer uses: BIOCEV/datasets is a symlink into tulen-local
+#: /disk2, invisible from kajman and panda even though the home is NFS-shared.
+BG_DIRS = [
+    "/home/prusek/mt_enc_exp/irm_backgrounds_v2",
+    "/home/prusek/BIOCEV/datasets/microtubules/IRM_backgrounds_v2",
+]
 
 
 def _load_cfg(calib: str | None):
@@ -56,7 +61,8 @@ def main() -> None:
     ap.add_argument("--n-frames", type=int, default=5)
     ap.add_argument("--out", default="data/synth_seq")
     ap.add_argument("--calib", default="/home/prusek/mt_enc_exp/calib_reg418_morph.json")
-    ap.add_argument("--bg-dir", default=BG_DIR)
+    ap.add_argument("--bg-dir", default=None,
+                    help="override; by default the first BG_DIRS entry that exists here")
     ap.add_argument("--seed", type=int, default=20260812)
     ap.add_argument("--drift-px", type=float, default=1.0,
                     help="stage drift per frame; a confound the tracker must not report "
@@ -68,9 +74,11 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     cfg = _load_cfg(args.calib)
     mcfg = MotionConfig(drift_px_std=args.drift_px)
-    bgs = sorted(glob.glob(os.path.join(args.bg_dir, "*.tif")))
+    cands = [args.bg_dir] if args.bg_dir else BG_DIRS
+    bgs = next((f for f in (sorted(glob.glob(os.path.join(d, "*.tif"))) for d in cands) if f), [])
     if not bgs:
-        raise SystemExit(f"no backgrounds under {args.bg_dir}")
+        raise SystemExit(f"no backgrounds in any of: {cands}")
+    print(f"backgrounds: {len(bgs)} from {os.path.dirname(bgs[0])}", flush=True)
 
     rng = np.random.default_rng(args.seed)
     manifest = []

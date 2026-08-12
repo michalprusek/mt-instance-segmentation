@@ -19,18 +19,27 @@ be layers on one correspondence:
 
 - CVAT **project 31 "Wiggly_MT"**: 80 tasks, one per `.mp4`, recorded 2026-02-19, conditions
   spanning pH 5.8–8.8 with MES/HEPES buffers, 4 channels × 4 positions.
-- Each task holds **2–5 frames**, not the whole video.
-- Annotations are **tracks, not shapes** (sampled tasks: 5, 5, 13 tracks) — so real cross-frame
-  identity ground truth exists. Most tasks are status `validation`, i.e. not finished; the
-  usable amount is modest and must be counted before it is relied on.
+- Each task holds **2–5 consecutive frames**, not the whole video. So real short sequences do
+  exist — 80 of them — as unannotated images.
+- **There is NO cross-frame microtubule ground truth.** The task metadata reports "tracks"
+  (5, 5, 13 on sampled tasks) and that reading is a trap: exporting them shows the only label
+  is `crop` and the shapes are **boxes that do not move** — task 438 has 5 boxes identical
+  between frames 0 and 1. They are crop regions for cutting sub-images, not filament tracks.
+  CVAT counts them as tracks because they are track-type objects; they track nothing.
 - 252 of the 584 corpus frames were drawn from these videos and then deduplicated down to 2–5
   frames each, which is why the generator has only ever seen stills.
-- **Displacement between consecutive frames is single-digit pixels** (user). To be verified
-  empirically from the annotated tracks as step 1 — cheap, and it calibrates the generator's
-  velocity prior instead of guessing it.
+- **Displacement between consecutive frames is single-digit pixels** (user). With no GT this
+  cannot be verified against annotations; it can be sanity-checked by running the current model
+  on consecutive frames and measuring how far matched filaments move. That is self-referential
+  and only good for order of magnitude — a large displacement would still be obvious.
 
 Small displacement is the favourable case: centerline overlap between frames is large, so
 association is geometrically easy and the arclength shift is measurable sub-pixel.
+
+**Consequence for every claim in this document:** all quantitative tracking results will rest
+on **synthetic sequences**. Real video supports qualitative inspection and an order-of-magnitude
+displacement check, nothing more, unless someone annotates identity across frames. That is a
+real limitation and must be stated wherever tracking numbers are reported.
 
 ## Architecture
 
@@ -115,20 +124,23 @@ geometry is measured to fail.
 
 ## Metrics
 
-- **identity**: track fragmentation and identity switches against synthetic GT, and against the
-  real CVAT tracks where they exist;
+- **identity**: track fragmentation and identity switches against synthetic GT. There is no
+  real equivalent — see the data section;
 - **velocity**: error in px/frame against the sampled synthetic velocity, and specifically
   whether frame-global drift leaks into it;
 - **tips**: endpoint position error and growth-rate error in the dynamic regime;
-- **fragmentation healing**: MT-34 instance F1 before and after temporal fusion — but MT-34 is
-  stills, so this is measured on synthetic sequences and on the real 2–5-frame CVAT tasks;
+- **fragmentation healing**: instance F1 before and after temporal fusion, on synthetic
+  sequences. MT-34 is stills, so it cannot measure this; the real 2–5-frame tasks can show it
+  qualitatively only;
 - **single-frame non-regression**: MT-34 TEST F1 vs 0.457, paired interval. The gate.
 
 ## Risks
 
-- **Real track GT may be too thin.** Most tasks are unfinished. Count it before relying on it;
-  if it is too thin, real video serves only as a qualitative check and all quantitative claims
-  rest on synthetic sequences, stated as such.
+- **There is no real track GT at all** (established, not feared — see the data section). Every
+  quantitative tracking claim is synthetic-only. The honest options are to accept that and say
+  so, or to have someone annotate identity across frames on a handful of the 80 real sequences.
+  Annotating even 5 sequences would turn "synthetic-only" into "validated on real data", and is
+  the single highest-value thing a human could contribute here.
 - **The temporal model may cost single-frame quality.** Covered by the gate above.
 - **The generator's motion priors are invented until calibrated.** Step 1 measures real
   displacement from the annotated tracks; until then every velocity number is synthetic-only.

@@ -419,7 +419,7 @@ def add_irm_noise(img, rng, cfg: GenConfig):
 
 
 # ----------------------------------------------------------------------------- renderers
-def render_irm(instances, cond, background, rng, cfg: GenConfig):
+def render_irm(instances, cond, background, rng, cfg: GenConfig, noise_rng=None):
     """IRM appearance via TWO-BEAM INTERFERENCE: each MT's per-segment HEIGHT h(s) [nm] sets a signed contrast
     -cos(2k·h)·E_INA(h) — DARK at contact (π shift), BRIGHT when elevated. Multiplicative composite bg*(1+field),
     then IRM sensor noise. (No whole-frame inversion: polarity ambiguity is a training augmentation.)"""
@@ -443,11 +443,11 @@ def render_irm(instances, cond, background, rng, cfg: GenConfig):
     add_spots(field, rng, cfg)
     field = gaussian_filter(field, rng.uniform(*cfg.psf_sigma_range))
     img = background.astype(np.float64) * (1.0 + field)
-    img = add_irm_noise(img, rng, cfg)
+    img = add_irm_noise(img, noise_rng if noise_rng is not None else rng, cfg)
     return img, {"inverted": False, "detach_active": detach_active, "ina": float(ina)}
 
 
-def render_tirf(instances, cond, background, rng, cfg: GenConfig):
+def render_tirf(instances, cond, background, rng, cfg: GenConfig, noise_rng=None):
     """TIRF appearance: BRIGHT fluorescent filaments on a DARK background, ADDITIVE (bg + signal),
     NO interference halo, detachment DIMS (less evanescent excitation), fluorescence shot noise."""
     H, W = background.shape
@@ -466,7 +466,9 @@ def render_tirf(instances, cond, background, rng, cfg: GenConfig):
     bg = (bg - bg.min()) / (bg.max() - bg.min() + 1e-6)              # normalize bg to [0,1] (dark field)
     img = cfg.tirf_bg_boost * bg + field                            # ADDITIVE bright signal on dark bg
     lo, hi = np.percentile(img, [0.5, 99.5]); span = max(hi - lo, 1e-6)
-    z = _shot_read_noise(np.clip((img - lo) / span, 0, 1), rng, cfg.tirf_poisson_gain_range, cfg.tirf_read_noise_range)
+    z = _shot_read_noise(np.clip((img - lo) / span, 0, 1),
+                         noise_rng if noise_rng is not None else rng,
+                         cfg.tirf_poisson_gain_range, cfg.tirf_read_noise_range)
     img = lo + np.clip(z, 0, 1) * span
     return img, {"inverted": False, "detach_active": detach_active}
 

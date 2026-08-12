@@ -97,7 +97,7 @@ def assign_to_gt(pred, gt, gt_ids, tol=6.0):
 
 def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
     switches = links = 0
-    completeness, per_obj_tracks, vel_err = [], [], []
+    completeness, per_obj_tracks, vel_err, vel_ratio = [], [], [], []
     n_frames_total = n_det = 0
 
     for sid, frames in sorted(seqs.items()):
@@ -107,8 +107,12 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
             a = fr["attrs"]
             gt = [np.asarray(p, float) * UP for p in fr["polylines"]]
             ids = [int(x) for x in np.atleast_1d(a["inst_ids"])]
+            # UNITS: the stored speed is px/frame at NATIVE scale, while every polyline here --
+            # ground truth and detection alike -- lives in the 1.5x eval frame. Scaling it is
+            # not cosmetic: without it the velocity error is a 1.5x unit mismatch reported as a
+            # model defect, which is exactly how the first "1-2 px/frame underestimate" arose.
             for i, sp in zip(ids, np.atleast_1d(a.get("speeds", []))):
-                speeds[i] = float(sp)
+                speeds[i] = float(sp) * UP
             det = detections(fr, masks, pred_dir, path, params, prob_thr)
             if det is None:
                 det_per_frame = []
@@ -148,6 +152,7 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
                 gt_v = speeds.get(named[0])
                 if np.isfinite(v) and gt_v is not None and abs(gt_v) > 1e-6:
                     vel_err.append(abs(v) - abs(gt_v))
+                    vel_ratio.append(abs(v) / abs(gt_v))
 
         for obj, ks in obj_frames.items():
             tids = obj_tracks.get(obj, set())
@@ -170,6 +175,9 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
         "completeness": float(np.mean(completeness)) if completeness else float("nan"),
         "tracks_per_object": float(np.mean(per_obj_tracks)) if per_obj_tracks else float("nan"),
         "velocity_err_median": float(np.median(vel_err)) if vel_err else float("nan"),
+        # The ratio is the honest headline: an additive error in px/frame says nothing without
+        # the speed it is measured against.
+        "velocity_ratio_median": float(np.median(vel_ratio)) if vel_ratio else float("nan"),
         "velocity_n": len(vel_err),
     }
 
@@ -195,7 +203,7 @@ def main() -> None:
     which = ["oracle", "model"] if args.masks == "both" else [args.masks]
     report = {}
     hdr = f"{'input':8s} {'det/frame':>10s} {'switches':>10s} {'switch rate':>12s} " \
-          f"{'completeness':>13s} {'tracks/obj':>11s} {'vel err':>9s}"
+          f"{'completeness':>13s} {'tracks/obj':>11s} {'vel err':>9s} {'vel ratio':>10s}"
     print(hdr)
     for m in which:
         r = score(seqs, m, args.pred_dir, params, args.prob_thr)
@@ -203,7 +211,7 @@ def main() -> None:
         print(f"{m:8s} {r['det_per_frame']:10.1f} {r['id_switches']:4d}/{r['links']:<5d} "
               f"{r['switch_rate']:12.3f} {r['completeness']:13.3f} "
               f"{r['tracks_per_object']:11.2f} "
-              f"{r['velocity_err_median']:+9.2f}")
+              f"{r['velocity_err_median']:+9.2f} {r['velocity_ratio_median']:10.3f}")
 
     if args.out_json:
         with open(args.out_json, "w") as fh:

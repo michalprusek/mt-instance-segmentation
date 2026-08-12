@@ -1067,3 +1067,49 @@ would attack.
   768² centre crop; the same filament count spread over seven times the area gave 0.01 %
   foreground against the expected ~1.6 %. It looked exactly like a broken model. The generator
   now crops to match, and predicted foreground came back at 1.3–1.8 %.
+
+### 18a. The velocity underestimate, diagnosed (2026-08-12)
+
+§18 left a 1-2 px/frame velocity bias open and said no velocity number should be quoted until
+it was understood. It now is, and the answer is not an estimator bug.
+
+**What it is not.** Four candidates were tested and eliminated:
+
+- *Curvature.* Nearest-neighbour arclength projection is exact on arcs down to R = 50 px
+  (κ = 0.02 rad/px): measured error 0.00 at every radius.
+- *Drift subtraction.* It works, and demonstrably: with drift switched off the error is
+  +0.27 px/frame; at 1.0 and 2.5 px/frame of drift, the error without subtraction rises to
+  +0.51 and +1.71, and **with** subtraction stays at +0.26 regardless. Removing drift is
+  removing drift, not signal.
+- *End trimming.* Sweeping `edge_frac` from 0.05 to 0.45 changes the answer by nothing at all.
+- *The estimator.* On ground-truth polylines from the actual sequence files, the median
+  per-pair ratio of measured to true shift is **0.984 and 1.030** on two gliding sequences,
+  and `track_velocity` reproduces it exactly.
+
+One genuine defect *was* found and fixed on the way: `eval_tracking.py` compared a shift
+measured in the 1.5x eval frame against a speed stored at native scale. That 1.5x mismatch was
+partially cancelling the real bias, which is why fixing it made the reported number look worse
+(−1.87 → −4.48 px/frame). An error that hides another error is the worst kind.
+
+**What it is: fragmented detections cannot carry a velocity.** With the same estimator, same
+drift handling and the same sequences, the ratio of measured to true speed is
+
+| detections | ratio to truth |
+|---|---|
+| ground-truth polylines | **0.98–1.03** |
+| instancer output, per frame pair | **0.543** |
+| instancer output, tracks surviving all 5 frames | **0.315** |
+
+Two effects compound. A detection's extent is set by where the mask is strong, not by which
+material the filament is made of, so as the filament glides the detection re-forms in roughly
+the same place and reports less motion than the material has. Then a **selection effect** on
+top: the tracks that survive every frame are the ones whose detection is stable, and a
+detection is stable precisely when it is anchored to something that is not moving — so the
+population you can measure velocity from is skewed towards the slowest apparent motion. The
+longer the track, the worse the bias, which is the opposite of the usual intuition that longer
+tracks are better evidence.
+
+**Consequence.** Gliding velocity is not measurable from this foreground at all, and no
+estimator change will fix it: the information is destroyed upstream. The fix is the same one
+§18 already identified for identity — less fragmentation — which is what the temporal training
+is testing. Until that lands, velocity stays unreported rather than reported with a caveat.

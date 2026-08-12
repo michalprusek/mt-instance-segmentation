@@ -1113,3 +1113,68 @@ tracks are better evidence.
 estimator change will fix it: the information is destroyed upstream. The fix is the same one
 §18 already identified for identity — less fragmentation — which is what the temporal training
 is testing. Until that lands, velocity stays unreported rather than reported with a caveat.
+
+## 19. Temporal context: it works, and the control is what proves it (2026-08-12)
+
+Two 30-epoch runs on kajman's free L40S, identical except the one variable: `p_single 0.35`
+(65 % of batches see `(t-1, t, t+1)`) against `p_single 1.00` (always `(t, t, t)` — same
+generator, same schedule, **zero temporal information**).
+
+No architecture change was needed. `DinoSeg` already takes three input channels because the
+frozen DINOv2 backbone expects RGB and the high-res branch starts with `Conv2d(3, 48, ...)`;
+today the same frame is replicated into all three. Putting neighbouring frames there makes the
+temporal model the same network, and the single frame its exact degenerate case.
+
+### The gate: single-frame quality holds
+
+MT-34 TEST, single-frame mode, paired against the deployed model on the same 17 frames:
+
+| model | mean F1 | vs deployed | p |
+|---|---|---|---|
+| deployed (v4b + synth-tuned) | 0.457 | — | — |
+| control | 0.441 | −0.016 [−0.050, +0.023] | 0.373 |
+| **temporal** | **0.471** | +0.014 [−0.031, +0.056] | 0.523 |
+
+Nothing is separable here, which is the point: the gate asks only that single-frame quality not
+regress, and it does not. Worth noting the split underneath: the temporal model is *worse* on
+sparse Alice (0.632 vs 0.695) and clearly better on the crossing-dense half (**0.382 vs 0.327**).
+
+### The result: fragmentation falls, and only for the temporal model
+
+Synthetic sequences, TEST split, bootstrapped over **sequences** (frames within one are
+near-copies; resampling frames would fake precision):
+
+| metric | v4b | control | temporal | temporal − control | p |
+|---|---|---|---|---|---|
+| **tracks per object** | 3.181 | 3.547 | **2.738** | **−0.810** [−1.354, −0.328] | **<0.001** |
+| **track completeness** | 0.559 | 0.523 | **0.614** | **+0.091** [+0.011, +0.170] | **0.023** |
+| identity switch rate | 0.007 | 0.011 | 0.007 | −0.004 | 0.763 |
+
+Against its matched control the temporal model is significantly better on both fragmentation
+measures. Each microtubule is followed by 2.74 tracks instead of 3.55, against an oracle
+reference of 1.59 — roughly **40 % of the gap between the real foreground and a perfect one,
+closed by information that was already in the video.**
+
+**Against the deployed v4b the same difference is not separable** (−0.443 [−0.954, +0.087],
+p = 0.100). v4b sits between control and temporal, and 12 sequences cannot resolve that
+narrower gap. So the honest claim is: *temporal context demonstrably reduces fragmentation
+relative to an identically trained single-frame model*, not yet *the temporal model beats the
+deployed one*.
+
+### Why the control earned its GPU
+
+Without it this would have read as "the new sequence generator improves tracking". It does not:
+the control is **worse than v4b on every metric** (3.55 vs 3.18 tracks per object, 0.523 vs
+0.559 completeness, and −0.016 on MT-34). The generator and schedule contributed nothing; the
+temporal channels contributed all of it. Half the compute bought the only interpretation that
+survives scrutiny.
+
+### Still not fixed
+
+Velocity remains unmeasurable: the ratio to truth is 0.397 for the temporal model against 0.418
+for v4b. §18a explains why — a detection's extent is set by the mask rather than the material,
+and the tracks that survive longest are the ones anchored to something stationary. Less
+fragmentation is necessary but not sufficient, and no velocity number is quoted.
+
+**Next, and cheap:** more synthetic sequences. Twelve is too few to resolve temporal against
+v4b, and sequences cost nothing but GPU time.

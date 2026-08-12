@@ -999,3 +999,71 @@ unnecessary, it was actively fitting the annotation noise.**
   re-instrumentation, the gated retrain, this). Each comparison was declared before it ran and
   each is reported with its interval, but the accumulated exposure is real and belongs in any
   write-up.
+
+## 18. Cross-frame tracking (2026-08-12)
+
+The generator produced only stills, so nothing could train or measure a tracker. `mt_sequence`
+adds time at the seam that already separated morphology from appearance, and
+`instance.tracker` associates across frames with the junction matcher pointed sideways.
+
+### The representation
+
+A microtubule is a **window of arclength on a longer fixed path**, which makes all three
+regimes one mechanism: static holds the window, gliding advances both ends together (so the
+filament slides along its own contour and conserves length by construction), dynamic
+instability moves the ends independently under catastrophe/rescue. Measured: gliding tip
+advance tracks the sampled speed at ratio 1.00, r = 0.989; the arclength window is conserved
+to 2e-13. `n_frames=1` is byte-identical to `generate_frame`, pinned by a test.
+
+### Two bugs that only measurement could find
+
+- **Velocity came out halved.** Projecting the head of frame t+1 onto frame t **saturates**
+  once the filament has advanced past t's end — the nearest point is the last vertex however
+  far it went — so averaging that with the correct tail estimate reported 3.55 px/frame too
+  little. Fixed by using interior matches only.
+- **Drift estimation measured motility.** A gliding filament's centroid travels along its own
+  contour at the full gliding speed, and in a gliding field *every* filament does, so the
+  median centroid shift returned 2.91 px of drift on sequences that had none. Only the
+  component perpendicular to a filament's own tangent is drift-free, so drift now comes from
+  normal-flow constraints pooled across filaments at different orientations — the aperture
+  problem, solved by orientation diversity. On a drift-free sequence the estimate fell to
+  0.32 px.
+
+### Results — synthetic sequences, 24 sequences x 5 frames
+
+| metric | oracle val | oracle test | model val | model test |
+|---|---|---|---|---|
+| detections / frame | 11.4 | 8.4 | 11.9 | 8.8 |
+| identity switch rate | 0.006 | 0.011 | 0.023 | 0.012 |
+| track completeness | 0.650 | 0.655 | 0.472 | 0.491 |
+| **tracks per object** | **1.77** | **1.59** | **3.50** | **3.21** |
+| velocity error (px/frame) | −1.50 | −1.87 | −1.01 | −1.96 |
+
+Val and test agree closely, which is the first thing to check on a benchmark this new.
+
+**Association is not the problem.** The identity switch rate is 0.6–2.3 % and barely moves
+between a perfect foreground and the real one: 2–5 switches in 170–354 links. The geometry-first
+bet held — at these displacements a learned association has nothing to add, and it was not
+built.
+
+**Fragmentation is the problem, again.** Tracks per object doubles from ~1.7 to ~3.4 when the
+foreground becomes real, and completeness falls from 0.65 to 0.48. Each microtubule is followed
+by three disconnected tracks instead of one. This is the same bottleneck §17p and §17q found,
+now visible in the time dimension, and it is exactly the quantity a temporal semantic model
+would attack.
+
+### Open, not fixed
+
+- **Velocity is systematically 1–2 px/frame low in every condition, including oracle.** Against
+  speeds of ~5 px/frame that is a 20–40 % underestimate, and it is not the halving bug (that
+  one is fixed and pinned). The remaining bias is present with a perfect foreground, so it is
+  in the estimator or in the instancer's endpoint trimming, not in the segmentation. No
+  velocity number should be quoted until this is understood.
+- Oracle tracks-per-object of 1.6–1.8 is higher than MT-34's oracle fragmentation (~1.05)
+  would suggest. Whether that is the metric's 50 %-coverage assignment rule, or filaments
+  leaving the field in the gliding regime, is not yet established.
+- **A dropped foreground was the first result and it was my error, not the model's.** The
+  initial sequences were built on uncropped 2048² backgrounds while the reference set uses a
+  768² centre crop; the same filament count spread over seven times the area gave 0.01 %
+  foreground against the expected ~1.6 %. It looked exactly like a broken model. The generator
+  now crops to match, and predicted foreground came back at 1.3–1.8 %.

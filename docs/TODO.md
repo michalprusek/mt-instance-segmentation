@@ -118,6 +118,20 @@ over-firing clean 0.6–0.7×; semantic tol2 **0.947** (val/test 6/6 split). For
 - [ ] **TEST multiplicity.** This session scored MT-34 TEST four times (v1/v2 re-instrumentation,
       gated retrain, synth-tuned). Each was declared before it ran and each carries its interval, but
       the accumulated exposure belongs in the write-up.
+- [ ] 🔴 **F1 LEVER #1 — temporal fusion at the INSTANCE level (designed, measured, NOT built).**
+      The tracker already knows which fragments belong together: a microtubule is followed by
+      **2.7–3.5 tracks** (oracle 1.59). Merging co-moving fragments into one instance per frame
+      converts fragmentation directly into F1 and needs **no training at all**. The size of the prize
+      comes from the metric: `rec2` is **0.971** while F1 is **0.457** — the model finds 97 % of the
+      centerline length and loses it in ASSEMBLY, because strict F1 wants 95 % coverage by ONE object.
+      Video only; the single-frame equivalent is lever #3 below.
+- [ ] 🔴 **F1 LEVER #3 — how many of the 326 false positives are real microtubules?**
+      On new-22 the model produces 326 FP against 193 TP, and MT-34's GT is human-corrected model
+      output that is demonstrably incomplete on sparse frames. Measure the residual image contrast
+      under each FP (the §17j machinery already does this: unannotated detections carried 2.06× the
+      contrast of background). If a large share sit on real filaments, **the measurable F1 ceiling is
+      below 1.0** and that changes what is worth optimising. Cheap, no training, and it must be done
+      BEFORE any precision-targeted work.
 - [ ] **Next lever for the foreground is NOT another gated retrain.** The two things that actually moved
       are opposed, so the target is explicit: cut false positives further WITHOUT adding fragmentation.
       Candidates worth costing: a connectivity-aware loss (soft-clDice weight was 0.1 — the run that

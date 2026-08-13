@@ -1265,3 +1265,45 @@ with no F1 gain. The runs continue on otherwise idle cards and may still differ 
 model raised branch points (2402 → 2771) while lowering breaks, so "better connectivity" is not
 one axis — but a third independent null would say the limit is in the instancer or in the
 ground truth, not in the mask.
+
+### 20b. cbDice: a clean negative, and a lesson about reading one's own instruments
+
+Two weights, 45-epoch recipe, prodA/prodB as the `cbdice_w = 0` control.
+
+| run | weight | foreground | gate | continuity over training |
+|---|---|---|---|---|
+| cbA | 0.5 | 2.1–2.8 % | PASS throughout | 0.563 → 0.603 → 0.671 → 0.762 → 0.762 |
+| cbB | 2.0 (the reference value) | **12–92 %** | **FAIL at every validation** | 0.485 → 0.281 → … |
+| control | 0 | 1.9–2.0 % | PASS | best 0.610 / 0.611 |
+
+**At the reference weight the model collapses to all-foreground** — the same failure this
+project already recorded for clDice at 0.5. Predicting MT-34 with cbB's best-scoring checkpoint
+gives 25.3 % foreground against the ~1.8 % of every healthy model, and its apparently excellent
+connectivity (0.93 components per microtubule, close to the oracle's 0.60) is that collapse: a
+mask covering a quarter of the frame has few components and few endpoints by construction.
+
+**At the safe weight it makes things worse**, monotonically, from 0.563 to 0.762 while the
+control sits at 0.610.
+
+Both runs were killed at epochs 11 and 13 rather than run to 45. cbA was degrading with every
+validation and cbB could never produce a shippable checkpoint, so the remaining ~10 GPU-hours
+would have bought nothing.
+
+**The lesson is about the instrument, not the loss.** `fg_quality.passes_overfiring_gate` exists
+precisely because the continuity metrics are gameable by dilation — that is written in its
+module docstring, with the measurement (raw foreground fraction ranks foregrounds at 0.75)
+behind it. It flagged `gate=FAIL` on every single cbB validation. I read the score column out of
+the training log without the gate column beside it and called 0.281 promising. The guard worked;
+the reading did not. Any future report of a continuity score must carry its gate verdict in the
+same sentence.
+
+### What this makes three
+
+Three independent interventions have now improved mask connectivity or fragmentation without
+moving F1: the gated retrain (§17p), morphological closing in both forms (§20), and the temporal
+model, which cut components per microtubule by 42 % for +0.014 F1 (§20a). cbDice adds a fourth
+data point of a different kind — it could not improve connectivity at all without collapsing.
+
+The weight of evidence now says the mask is **not** what limits F1, and the search should move
+to the instancer or to the benchmark's own ground truth. TODO lever #3 — how many of the 326
+false positives are unannotated real microtubules — is the cheapest next test and is unblocked.

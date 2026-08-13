@@ -1234,3 +1234,34 @@ cannot be told from its neighbour.
   real training conditions it produces 10.6 % of faint length in runs ≥10 px against reality's
   2.5 %, i.e. four times too many. The earlier contrary measurement used `data/synth_eval`,
   which predates the physics renderer.
+
+### 20a. Connectivity improves 42 % and F1 does not move (2026-08-13)
+
+`scripts/mask_topology.py` measures the quantity §20 identified as the failure. On MT-34 TEST:
+
+| model | components / MT | endpoints / MT | branch points | fg % |
+|---|---|---|---|---|
+| **oracle** (target) | **0.60** | **1.96** | 2689 | 1.58 |
+| v4b (deployed) | 3.82 | 7.95 | 2402 | 1.85 |
+| **temporal** | **2.20** | **5.30** | 2771 | 1.87 |
+| control (same recipe, no temporal input) | 3.74 | 8.32 | 2858 | 1.98 |
+
+The temporal model cuts components per microtubule by **42 %** and endpoints by **33 %**, and
+its matched control does not move at all. That is the strongest evidence yet that temporal
+context repairs the shattering, and it lands exactly on the metric §20 nominated.
+
+**And its MT-34 F1 was +0.014, not separable from zero.** Connectivity improved by 42 % and the
+target metric did not move.
+
+The likely reason is that the instancer was already repairing it: instance-level fragmentation
+is 1.13 even at 3.8 mask components per microtubule, because arc-level gap linking bridges the
+breaks before they reach the metric. If so, improving mask connectivity is work the pipeline
+was already doing, and §20's diagnosis — while correct that the mask is shattered — was wrong
+that this is what limits F1.
+
+This is recorded **before** the cbDice runs finish, because it recalibrates what they can be
+expected to show: cbDice targets connectivity, and connectivity has just been improved 42 %
+with no F1 gain. The runs continue on otherwise idle cards and may still differ — the temporal
+model raised branch points (2402 → 2771) while lowering breaks, so "better connectivity" is not
+one axis — but a third independent null would say the limit is in the instancer or in the
+ground truth, not in the mask.

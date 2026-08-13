@@ -1178,3 +1178,59 @@ fragmentation is necessary but not sufficient, and no velocity number is quoted.
 
 **Next, and cheap:** more synthetic sequences. Twelve is too few to resolve temporal against
 v4b, and sequences cost nothing but GPU time.
+
+## 20. Bottleneck, located by elimination (2026-08-13)
+
+The predicted foreground was assumed to be the bottleneck, and it is — but not for any of the
+reasons previously written down. Four candidate causes were measured and eliminated:
+
+| candidate | measurement | verdict |
+|---|---|---|
+| missing coverage | 99.2 % of GT length has foreground within 5 px (the metric's own tolerance) | **not it** |
+| poor localisation | 89.3 % of skeleton pixels lie within 5 px of a GT centerline | **not it** |
+| mask too thick | predicted width median **4.00 px**, oracle **4.00 px** | **not it** |
+| false branch points | predicted 2621 branch points vs oracle 2689 | **not it** |
+
+What is left, and it is stark:
+
+| | branch points | endpoints | **connected components** | skeleton px |
+|---|---|---|---|---|
+| oracle | 2689 | 968 | **294** | 219 486 |
+| predicted | 2621 | **4302** | **2043** | 243 060 |
+
+**The mask is shattered: 7.0x more components and 4.4x more loose ends for the same 494
+microtubules**, with the same width, the same branch topology and complete coverage. The breaks
+are sub-pixel — a one-pixel hole splits a component while costing one pixel of coverage, which
+is why every coverage-based metric said the foreground was fine.
+
+That single fact explains the numbers that did not add up. The instancer repairs most of it
+through arc-level gap linking, so instance fragmentation is only 1.13 — but the repair fails
+exactly where the project's two stated bottlenecks live: **junction identity 0.965 → 0.500** and
+**bundle recovery 0.634 → 0.238** when the oracle mask is swapped for the predicted one. A
+filament broken near a crossing arrives as a stub rather than an arm, and a broken parallel
+cannot be told from its neighbour.
+
+### What was tried and did not work
+
+- **Morphological closing**, isotropic radius 1–3: fragmentation 1.13 → 1.10, F1 unchanged
+  (0.457 → 0.455 at r=2, and 0.425 at r=3). All differences except r=3 sit inside the ±0.08
+  interval on 17 frames, so the honest reading is *no measurable effect*.
+- **Anisotropic closing along the orientation channels** (line element per channel, so gaps are
+  bridged along a filament and never across it): fragmentation 1.11, F1 0.451 — again flat. One
+  side effect is worth keeping: **bundle recovery 0.238 → 0.301**, the first measurable use ever
+  found for the orientation channels, whose `w_ori` term measures exactly 0.000.
+- Both add pixels, and the strict metric wants 95 % *precision* coverage, so what is gained in
+  connectivity is paid back in precision.
+
+### Two corrections to earlier claims in this document
+
+- The "model is confidently blind on 15.8 % of each microtubule" line of reasoning was **an
+  artefact of my own diagnostic**, which sampled the probability at the exact GT pixel with zero
+  tolerance. At 1 px it is 3.7 %, at the metric's 5 px it is **0.8 %**. Ninety-three percent of
+  the apparent blindness was one pixel of annotation offset, visible directly in
+  `gap_viz/`: five of the six longest "gaps" have a clearly visible filament with the GT line
+  drawn beside it.
+- The follow-on hypothesis that the generator lacks long faint stretches is **refuted**: under
+  real training conditions it produces 10.6 % of faint length in runs ≥10 px against reality's
+  2.5 %, i.e. four times too many. The earlier contrary measurement used `data/synth_eval`,
+  which predates the physics renderer.

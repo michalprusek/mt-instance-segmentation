@@ -60,6 +60,7 @@ os.environ.setdefault("SEG_BACKBONE", "dinov2")
 os.environ.setdefault("SEG_INPUT", "raw")
 os.environ.setdefault("SEG_ARCH", "base")
 
+from cbdice_loss import soft_cbdice  # noqa: E402
 from dino_seg import IMA_M, IMA_S, DinoSeg, dice, soft_cldice  # noqa: E402
 from mt_bench.fg_quality import (foreground_quality, mean_properties,  # noqa: E402
                                  passes_overfiring_gate, quality_score, select_checkpoint)
@@ -206,6 +207,12 @@ def main() -> None:
                     help="fraction of batches shown as (t,t,t); keeps one net serving both")
     ap.add_argument("--drift-px", type=float, default=1.0)
     ap.add_argument("--synth-fg", type=float, default=0.016)
+    ap.add_argument("--cbdice-w", type=float, default=0.0,
+                    help="weight on centerline-BOUNDARY Dice. It targets the measured failure "
+                         "directly -- the mask is shattered into 7x too many components while "
+                         "coverage, width and branch topology all match the oracle -- by "
+                         "weighting the topological terms with the local radius, so a break in "
+                         "a two-pixel filament costs more than the same break in a thick one.")
     args = ap.parse_args()
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -245,8 +252,11 @@ def main() -> None:
                 out, aux = out
 
             def sloss(o):
-                return (F.binary_cross_entropy_with_logits(o, mk, pos_weight=pos_w)
+                base = (F.binary_cross_entropy_with_logits(o, mk, pos_weight=pos_w)
                         + dice(o, mk) + cldice_w * soft_cldice(o, mk))
+                # cbDice saturates once the thresholded mask is topologically right, so it is
+                # ADDED to the pixel losses rather than replacing any of them.
+                return base + (args.cbdice_w * soft_cbdice(o, mk) if args.cbdice_w > 0 else 0.0)
 
             loss = sloss(out) + (aux_w * sloss(aux) if aux is not None else 0.0)
             opt.zero_grad()

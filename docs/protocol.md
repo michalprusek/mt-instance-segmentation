@@ -1307,3 +1307,59 @@ data point of a different kind — it could not improve connectivity at all with
 The weight of evidence now says the mask is **not** what limits F1, and the search should move
 to the instancer or to the benchmark's own ground truth. TODO lever #3 — how many of the 326
 false positives are unannotated real microtubules — is the cheapest next test and is unblocked.
+
+## 21. A day of interventions, and a consistent null (2026-08-13)
+
+Five independent attempts to raise F1, all measured, none of which moved it:
+
+| intervention | what it did move | F1 |
+|---|---|---|
+| gated retrain (§17p) | continuity metric −25 % | −0.023, p=0.23 |
+| morphological closing (§20) | fragmentation 1.13 → 1.10 | flat, −0.032 at r=3 |
+| anisotropic closing (§20) | bundle recovery 0.238 → **0.301** | flat |
+| temporal model (§20a) | mask components/MT **3.82 → 2.20** | +0.014, p=0.52 |
+| cbDice (§20b) | collapsed at w=2, degraded at w=0.5 | not shippable |
+| field-of-view erosion (below) | false positives 364 → 327 | **+0.001 on VAL** |
+
+### The false positives are not what limits F1 either
+
+`audit_false_positives.py` split the 367 false positives on TEST into what they actually are:
+
+| category | count | share |
+|---|---|---|
+| fragment of an **annotated** microtubule | 265 | 72.2 % |
+| away from every annotation | 102 | 27.8 % |
+
+**Seventy-two percent are not false detections at all** — they are pieces of annotated
+microtubules that failed the 95 % coverage rule, counted once as a false positive and again as
+a false negative for the ground truth they failed to cover. "Precision is the larger loss on
+the crossing-dense half" was a misreading of the same fragmentation, wearing a different label.
+
+The remaining 102 carried 7.66x the contrast of the same curve dropped at random, which looked
+like unannotated real filaments and would have meant the measurable ceiling is below 1.0.
+**Looking at them refuted that**: they are the field-stop edge. 70.6 % lie within 20 px of the
+aperture boundary, where **0.0 %** of true positives do (median distance 11 px against 489 px).
+
+Eroding the field-of-view mask further does remove them — 364 → 327 false positives on VAL —
+and F1 does not move: 0.466 at the current 4 px against 0.467 at 12 px, with the whole sweep
+flat between 0.449 and 0.467.
+
+### Two near-misses the discipline caught
+
+- **cbDice's collapse.** Its continuity score of 0.281 was the best number seen all day and I
+  reported it as promising. Every one of those validations carried `gate=FAIL` with 12–92 %
+  foreground in the same line of the log. The over-firing gate was right; reading the score
+  column without the gate column was not.
+- **A TEST-tuned +0.017.** The erosion sweep was run on TEST first and showed 0.457 → 0.474 at
+  12 px. Repeating the selection on VAL showed +0.001 and a flat curve. Taking the first number
+  would have been fitting the test split, and it would have looked like the day's best result.
+
+### Where this leaves the search
+
+Coverage, localisation, width, branch topology, mask connectivity, and false positives have now
+each been measured and each eliminated as the limiting factor. What has not been examined is the
+**instancer's 95 % coverage rule itself** — the point at which a well-formed mask becomes an
+instance that either matches a ground-truth microtubule or does not. 72 % of the false positives
+are created exactly there, and the instancer's own parameters were fitted on synthetic data with
+exact ground truth (§17q), against which this rule behaves differently than it does against
+human polylines that are 1 px offset (§20).

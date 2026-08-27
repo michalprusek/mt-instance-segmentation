@@ -98,6 +98,7 @@ def assign_to_gt(pred, gt, gt_ids, tol=6.0):
 def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
     switches = links = 0
     completeness, per_obj_tracks, vel_err, vel_ratio = [], [], [], []
+    det_obj_tracks, det_completeness = [], []
     n_frames_total = n_det = 0
 
     for sid, frames in sorted(seqs.items()):
@@ -165,6 +166,12 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
                 tr = tracks[tid]
                 best = max(best, sum(1 for k in tr.frames if k in ks))
             completeness.append(best / max(len(ks), 1))
+            # An object nobody detected contributes ZERO tracks and ZERO completeness, so a
+            # foreground that simply misses more microtubules scores as LESS fragmented. That
+            # is an error in the measured model's favour, and the two populations have to be
+            # separable: these lists hold only the objects that were detected at all.
+            det_obj_tracks.append(len(tids))
+            det_completeness.append(best / max(len(ks), 1))
 
     return {
         "n_frames": n_frames_total,
@@ -174,6 +181,17 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
         "switch_rate": switches / max(links, 1),
         "completeness": float(np.mean(completeness)) if completeness else float("nan"),
         "tracks_per_object": float(np.mean(per_obj_tracks)) if per_obj_tracks else float("nan"),
+        # The same quantities over DETECTED objects only, plus the detection rate that
+        # separates them. tracks_per_object mixes "followed by three fragments" with
+        # "never seen at all", and the second is what a missing foreground looks like --
+        # scoring, wrongly, as excellent fragmentation.
+        "n_objects": len(per_obj_tracks),
+        "detected_frac": (float(len(det_obj_tracks) / len(per_obj_tracks))
+                          if per_obj_tracks else float("nan")),
+        "tracks_per_detected_object": (float(np.mean(det_obj_tracks))
+                                       if det_obj_tracks else float("nan")),
+        "completeness_detected": (float(np.mean(det_completeness))
+                                  if det_completeness else float("nan")),
         "velocity_err_median": float(np.median(vel_err)) if vel_err else float("nan"),
         # The ratio is the honest headline: an additive error in px/frame says nothing without
         # the speed it is measured against.
@@ -203,15 +221,19 @@ def main() -> None:
     which = ["oracle", "model"] if args.masks == "both" else [args.masks]
     report = {}
     hdr = f"{'input':8s} {'det/frame':>10s} {'switches':>10s} {'switch rate':>12s} " \
-          f"{'completeness':>13s} {'tracks/obj':>11s} {'vel err':>9s} {'vel ratio':>10s}"
+          f"{'complete':>9s} {'trk/obj':>8s} | {'found':>6s} {'compl|det':>10s} " \
+          f"{'trk/det obj':>12s}"
     print(hdr)
     for m in which:
         r = score(seqs, m, args.pred_dir, params, args.prob_thr)
         report[m] = r
         print(f"{m:8s} {r['det_per_frame']:10.1f} {r['id_switches']:4d}/{r['links']:<5d} "
-              f"{r['switch_rate']:12.3f} {r['completeness']:13.3f} "
-              f"{r['tracks_per_object']:11.2f} "
-              f"{r['velocity_err_median']:+9.2f} {r['velocity_ratio_median']:10.3f}")
+              f"{r['switch_rate']:12.3f} {r['completeness']:9.3f} "
+              f"{r['tracks_per_object']:8.2f} | {r['detected_frac']:6.3f} "
+              f"{r['completeness_detected']:10.3f} "
+              f"{r['tracks_per_detected_object']:12.2f}")
+        # Velocity is deliberately absent from this table: it is not measurable from this
+        # foreground (protocol 18a) and a printed number invites quotation. It stays in JSON.
 
     if args.out_json:
         with open(args.out_json, "w") as fh:

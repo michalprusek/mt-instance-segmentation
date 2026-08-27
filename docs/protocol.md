@@ -1363,3 +1363,97 @@ instance that either matches a ground-truth microtubule or does not. 72 % of the
 are created exactly there, and the instancer's own parameters were fitted on synthetic data with
 exact ground truth (§17q), against which this rule behaves differently than it does against
 human polylines that are 1 px offset (§20).
+
+## 22. Tracking measured on v5H, and a metric that was flattering it (2026-08-26)
+
+§18 and §19 measured tracking on v4b and on a temporal variant of it. The deployed model is
+v5H — a different architecture, a different generator, its own instancer parameters — and the
+tracker had never been run on its foreground. The deployed package carried `instance/tracker.py`
+but nothing that called it.
+
+### Reproducing the benchmark before comparing anything to it
+
+The sequence set was lost with the rest of tulen's tree; only `manifest.json` survived. It was
+regenerated from the same seed and the same **original** calibration — deliberately not v5H's
+own SNR-corrected one, which would have handed the model its own generator's video and made the
+comparison a home fixture. The regenerated manifest is **byte-identical** (md5 `f4a319abe3`),
+and the oracle arm reproduces §18 to the exact switch counts:
+
+| | det/frame | switches | switch rate | completeness | tracks/obj |
+|---|---|---|---|---|---|
+| oracle VAL, §18 / re-run | 11.4 / 11.4 | — / 2/354 | 0.006 / 0.006 | 0.650 / 0.650 | 1.77 / 1.77 |
+| oracle TEST, §18 / re-run | 8.4 / 8.4 | — / 3/276 | 0.011 / 0.011 | 0.655 / 0.655 | 1.59 / 1.59 |
+
+Identical rasterised ground truth means the **morphology** is reproduced exactly; the frames'
+appearance cannot be verified against files that no longer exist, so the caveat on any
+cross-run comparison is scoped to appearance alone.
+
+### The metric was rewarding a model for missing microtubules
+
+`tracks_per_object` averages over every GT object, and an object nobody detected contributes
+**zero tracks**. A foreground that simply misses more therefore scores as *less* fragmented —
+an error in the measured model's favour, in exactly the direction that would have been quoted.
+`eval_tracking.py` now also reports `detected_frac`, `tracks_per_detected_object` and
+`completeness_detected`. The patch is additive and was **proven a no-op**: all ten pre-existing
+keys are identical across all four arms of the run that preceded it.
+
+Measured, the suspicion was wrong in an interesting way: v5H's detected fraction (0.88 TEST) is
+*higher* than the oracle's (0.80), because the oracle loses filaments shorter than
+`min_length`. The comparison was not inflated.
+
+### Results, TEST split, both benchmarks
+
+| benchmark | arm | switch rate | trk/obj | found | compl\|det | trk/det obj |
+|---|---|---|---|---|---|---|
+| original (§18/§19) | oracle | 0.011 | 1.59 | 0.804 | 0.815 | 1.98 |
+| original (§18/§19) | **v5H** | 0.014 | **2.52** | 0.882 | 0.633 | 2.86 |
+| v5H's own generator | oracle | 0.006 | 1.46 | 0.840 | 0.854 | 1.74 |
+| v5H's own generator | **v5H** | 0.014 | 3.10 | 0.975 | 0.614 | **3.18** |
+
+**§18's central finding survives the change of model.** Association is not the problem: 3
+switches in 207 links, against the oracle's 3 in 276. Fragmentation is: each detected
+microtubule is followed by 2.9–3.2 tracks against an oracle 1.7–2.0.
+
+Against the recorded v4b, on the same benchmark and instancer: **2.52 against 3.181** tracks per
+object, with the temporal model of §19 at 2.738. v5H is less fragmented in time than either,
+without using any temporal information — but this is the mixed metric (the only form v4b's
+number exists in) and a cross-run comparison, since v4b's predictions were lost.
+
+### The open negative: these sequences are not v5H's training distribution
+
+Single-frame strict F1 on the sequences is **0.067–0.152**, against 0.495 for the same weights
+on real MT-34 VAL. Threshold was the obvious suspect and is **ruled out** — a sweep over cached
+probability maps is flat while the foreground fraction moves through its target:
+
+| thr | 0.50 | 0.70 | 0.85 | 0.92 | 0.97 | 0.99 |
+|---|---|---|---|---|---|---|
+| F1 | 0.073 | 0.066 | 0.077 | 0.071 | **0.078** | 0.067 |
+| foreground | 1.58 % | 1.41 % | 1.28 % | 1.20 % | 1.09 % | 0.97 % |
+
+At thr 0.50 the foreground fraction is exactly on target (1.58 % against ~1.6 %) and F1 does not
+move. The mask is shattered, not under-thresholded — §20's finding again. What this points at is
+`build_synth_seq.py` building its config from a calibration JSON via `gen_train.build_cfg`,
+while v5H was trained through `train_v5.py`'s own dataset path; the two do not produce the same
+appearance. **Consequence: the tracking numbers above characterise the tracker on a degraded
+foreground, and are a lower bound on what this model does on real video.** Not fixed here.
+
+### Shipping it: `track.py`
+
+The entry point the package lacked. It reuses `predict.py`'s `Segmenter` and `instance_a`
+unchanged, associates in the **1.5x working frame** where the tracker's gates were fitted, and
+emits native-scale coordinates — the one thing that would have failed silently, since
+associating at native scale runs fine and merely loosens every gate by 1.5x. Three checks:
+
+- **against the evaluation path**, same sequence: 67 tracks / 97 linked detections against
+  66 / 95. Not bit-identical by construction (the package predicts in fp32 at stride 388,
+  the trainer in bf16 at 387) and not expected to be;
+- **scale mutation**: the same detections tracked at native scale give 71 tracks and 41 linked
+  detections against 66 and 47. The frame choice is load-bearing, and the test would have
+  caught getting it wrong;
+- **in the production container on cvat2**, the bundled sample duplicated into three frames
+  named `00`, `02`, `10` (natural sort, not lexical): 65 instances per frame → **65 tracks,
+  195 linked detections, zero births after the first frame**, which is the only correct answer
+  for identical frames.
+
+Velocity is deliberately absent from the output and from the printed table: §18a established it
+is not measurable from this foreground, and a field in a JSON file will be used.

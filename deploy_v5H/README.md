@@ -147,8 +147,13 @@ succeeds; the gap to the oracle is still the whole story.
 > The information is destroyed upstream of the estimator, so no velocity is emitted at all
 > rather than one emitted with a caveat.
 
-The association gates were fitted at ~5 px/frame of motion. `--max-shift` (in input pixels) and
-`--min-overlap` expose them for faster acquisitions; left unset, the fitted values are used
+The association gates were chosen against ~5 px/frame of motion, and which one binds depends on
+the direction of the motion. `--max-shift` gates the mean curve-to-curve distance between two
+centerlines, so a filament **gliding along its own contour** stays close to where it was however
+far the material travelled and is barely affected by it. What caps association across
+**transverse** motion is `--overlap-tol`: past ~2.67 input pixels sideways the two centerlines
+stop overlapping and cannot be linked, whatever `--max-shift` says. Both are given in input
+pixels; `--min-overlap` is a unitless fraction. Left unset, the fitted values are used
 unchanged, which is the configuration every number above was measured with.
 
 ---

@@ -70,9 +70,19 @@ def detections(fr, masks: str, pred_dir: str, path: str, params: dict, prob_thr:
     else:
         npz = os.path.join(pred_dir, os.path.basename(path).replace(".h5", ".npz"))
         if not os.path.exists(npz):
-            return None
+            # Returning None here used to drop the whole sequence from the MODEL arm while the
+            # oracle arm -- which never reads pred_dir -- kept it, so the two rows printed side
+            # by side as a comparison were scored on different populations, with nothing in the
+            # output saying so. A killed prediction batch drops the later, denser sequences,
+            # which is exactly the direction that flatters the model.
+            raise SystemExit(
+                f"missing prediction for {os.path.basename(path)}: {npz}\n"
+                f"Refusing to score a partial model arm against a complete oracle arm.")
         chans = np.load(npz)["prob"].astype(np.float32)
-        thr = params.get("prob_thr", prob_thr)
+        # CLI wins over the params file, matching predict.py and track.py. The old order let
+        # the params file's prob_thr shadow --prob-thr entirely, so a threshold sweep would
+        # have silently held the threshold constant and produced a perfectly flat curve.
+        thr = prob_thr if prob_thr is not None else params.get("prob_thr", 0.35)
     prob = chans.max(axis=0)
     pls, _ = instance_a(prob > thr, KAPPA_MAX, params, channels=chans, prob=prob)
     return pls
@@ -115,9 +125,6 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
             for i, sp in zip(ids, np.atleast_1d(a.get("speeds", []))):
                 speeds[i] = float(sp) * UP
             det = detections(fr, masks, pred_dir, path, params, prob_thr)
-            if det is None:
-                det_per_frame = []
-                break
             gt_per_frame.append(gt)
             ids_per_frame.append(ids)
             det_per_frame.append(det)
@@ -137,11 +144,20 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
             for i in ids:
                 obj_frames[i].add(k)
 
+        # Which detection is this track's polyline? Value-equal detections would otherwise
+        # both resolve to the FIRST matching index, so one GT object's id would be counted
+        # twice and another never -- corrupting the identity-switch count silently. Excluding
+        # indices another track already claimed removes that; track_sequence covers every
+        # detection exactly once, so the claim is unique by construction.
+        claimed = [set() for _ in det_per_frame]
         for tr in tracks:
             seq_ids = []
             for k, poly in zip(tr.frames, tr.polylines):
                 j = next((idx for idx, p in enumerate(det_per_frame[k])
-                          if p is poly or np.array_equal(np.asarray(p), np.asarray(poly))), None)
+                          if idx not in claimed[k] and
+                          (p is poly or np.array_equal(np.asarray(p), np.asarray(poly)))), None)
+                if j is not None:
+                    claimed[k].add(j)
                 seq_ids.append(owner[k][j] if j is not None else None)
             named = [x for x in seq_ids if x is not None]
             switches += sum(1 for x, y in zip(named, named[1:]) if x != y)
@@ -207,7 +223,9 @@ def main() -> None:
     ap.add_argument("--masks", default="oracle", choices=["oracle", "model", "both"])
     ap.add_argument("--pred-dir", default="/home/prusek/mt_enc_exp/synth_seq_pred")
     ap.add_argument("--params", default="src/instance/params_a_model_synthtuned.json")
-    ap.add_argument("--prob-thr", type=float, default=0.35)
+    ap.add_argument("--prob-thr", type=float, default=None,
+                    help="foreground threshold for the model arm; overrides the params file. "
+                         "Default: whatever the params file says.")
     ap.add_argument("--out-json", default=None)
     args = ap.parse_args()
 
@@ -216,7 +234,10 @@ def main() -> None:
     seqs = load_sequences(args.data, args.split)
     if not seqs:
         raise SystemExit(f"no {args.split} sequences under {args.data}")
-    print(f"{len(seqs)} sequences, {sum(len(v) for v in seqs.values())} frames\n")
+    thr_eff = args.prob_thr if args.prob_thr is not None else params.get("prob_thr", 0.35)
+    print(f"{len(seqs)} sequences, {sum(len(v) for v in seqs.values())} frames"
+          + (f", model threshold {thr_eff:.3f}" if args.masks in ("model", "both") else "")
+          + "\n")
 
     which = ["oracle", "model"] if args.masks == "both" else [args.masks]
     report = {}

@@ -97,7 +97,7 @@ With `--overlay`, colour is the **track identity**, so the same microtubule keep
 across frames and a switch is visible by eye.
 
 The association is pure geometry — no learned weights, nothing to train. Filaments in
-consecutive frames are paired by a **global min-cost matching** under a displacement bound with
+consecutive frames are paired by a **global min-cost matching** under a distance bound with
 a priced "leave this one unmatched" option, which is what track birth and death are. Global
 rather than greedy, for the same reason the instancer's junction matcher is: a greedy
 nearest-neighbour link cannot revisit a wrong choice, so in a dense bundle the first filament
@@ -115,15 +115,19 @@ one the tracker was originally validated on, and one from this model's own gener
 calibration. `oracle` is the same instancer and tracker run on ground-truth centerlines — the
 ceiling this foreground would have to reach, not a competitor.
 
-| test split | identity switch rate | tracks per detected microtubule | objects found |
+| test split | identity switch rate | tracks per detected microtubule | objects followed |
 |---|---|---|---|
 | **v5H**, original set | 0.014 | 2.86 | 0.88 |
 | oracle, original set | 0.011 | 1.98 | 0.80 |
 | **v5H**, own-generator set | 0.014 | 3.18 | 0.98 |
 | oracle, own-generator set | 0.006 | 1.74 | 0.84 |
 
-*"Objects found" is below 1.0 for the oracle too: filaments shorter than the instancer's
-`min_length` never become a detection at all, whichever mask they came from.*
+*"Objects followed" is the share of ground-truth microtubules picked up by at least one
+track, under a rule that asks half of a detection to lie within 6 px of one filament. It is not
+a detection rate in the plain sense: a filament found but split so that no piece reaches half
+counts as not followed, and so does one merged with its neighbour. It is below 1.0 for the
+oracle too, because filaments shorter than the instancer's `min_length` never become a
+detection at all, whichever mask they came from.*
 
 Read it this way. **Association is not the problem:** 3 identity switches in 207 links, barely
 above what the same tracker does on perfect input. **Fragmentation is.** Each microtubule is
@@ -149,12 +153,21 @@ succeeds; the gap to the oracle is still the whole story.
 
 The association gates were chosen against ~5 px/frame of motion, and which one binds depends on
 the direction of the motion. `--max-shift` gates the mean curve-to-curve distance between two
-centerlines, so a filament **gliding along its own contour** stays close to where it was however
-far the material travelled and is barely affected by it. What caps association across
-**transverse** motion is `--overlap-tol`: past ~2.67 input pixels sideways the two centerlines
-stop overlapping and cannot be linked, whatever `--max-shift` says. Both are given in input
-pixels; `--min-overlap` is a unitless fraction. Left unset, the fitted values are used
-unchanged, which is the configuration every number above was measured with.
+centerlines, so **association** of a filament gliding along its own contour is barely affected
+however far the material travelled. (It has a second role that is: it is the radius within which
+the drift estimator pairs centroids, and a gliding filament's centroid does move at the full
+gliding speed.) What caps association across **transverse** motion is `--overlap-tol`: past
+~2.67 input pixels sideways the two centerlines stop overlapping and cannot be linked, whatever
+`--max-shift` says — measured *relative to the common mode*, since stage drift is estimated and
+removed first, so a drifting field does not need this raised and differential motion does.
+Raising it well past the spacing between neighbouring filaments lets one link to its neighbour,
+which is an identity error rather than a longer track; `--min-overlap 0` has the same effect.
+Both distances are in input pixels, `--min-overlap` is a unitless fraction, and leaving them
+unset keeps the fitted gates the tracking numbers above were measured with.
+
+If the frame folder holds more than one image format — which is what running `predict.py
+--overlay` into it produces — the most numerous one is used, the rest are reported both on the
+console and in `tracks.json`, and `--ext` overrides the choice.
 
 ---
 

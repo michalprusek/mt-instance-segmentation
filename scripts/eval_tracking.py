@@ -16,7 +16,15 @@ Metrics
 * **track completeness** -- fraction of a GT object's frames covered by its single best track;
 * **tracks per object** -- >1 means the object was followed by several disconnected tracks,
   which is fragmentation surviving into time and the size of the fusion opportunity;
-* **velocity error** -- against the sampled gliding speed, drift removed.
+* **detected fraction** -- what share of GT objects were followed by ANY track. It is reported
+  because the three metrics above average over every object and score an object nobody detected
+  as zero tracks and zero completeness, so a foreground that simply misses more looks LESS
+  fragmented. ``tracks_per_detected_object`` and ``completeness_detected`` are the same
+  quantities over the objects that were actually followed, and the pair is only interpretable
+  together with this rate;
+* **velocity error** -- computed and kept in the JSON, but deliberately absent from the printed
+  table: protocol 18a established it is not measurable from this foreground, and a number in a
+  table gets quoted.
 
     PYTHONPATH=src:synth ~/dinov3_env/bin/python scripts/eval_tracking.py \
         --data data/synth_seq --split test --masks oracle
@@ -46,6 +54,12 @@ UP = 1.5
 KAPPA_MAX = 0.25
 
 
+class MissingPrediction(Exception):
+    """A frame has no cached prediction. A domain error, not ``SystemExit``: ``score`` is
+    imported and called directly by the tests and by sweep drivers, and ``SystemExit`` derives
+    from ``BaseException``, so it escapes ``except Exception`` and kills the caller."""
+
+
 def load_sequences(data_dir: str, split: str):
     """Group frames by sequence, in frame order."""
     seqs = collections.defaultdict(list)
@@ -73,19 +87,42 @@ def detections(fr, masks: str, pred_dir: str, path: str, params: dict, prob_thr:
             # Returning None here used to drop the whole sequence from the MODEL arm while the
             # oracle arm -- which never reads pred_dir -- kept it, so the two rows printed side
             # by side as a comparison were scored on different populations, with nothing in the
-            # output saying so. A killed prediction batch drops the later, denser sequences,
-            # which is exactly the direction that flatters the model.
-            raise SystemExit(
-                f"missing prediction for {os.path.basename(path)}: {npz}\n"
+            # output saying so. Which sequences go missing is not random either: an interrupted
+            # prediction job loses whichever it had not reached.
+            raise MissingPrediction(
+                f"missing prediction for {os.path.basename(path)}: {npz}. "
                 f"Refusing to score a partial model arm against a complete oracle arm.")
         chans = np.load(npz)["prob"].astype(np.float32)
-        # CLI wins over the params file, matching predict.py and track.py. The old order let
-        # the params file's prob_thr shadow --prob-thr entirely, so a threshold sweep would
-        # have silently held the threshold constant and produced a perfectly flat curve.
-        thr = prob_thr if prob_thr is not None else params.get("prob_thr", 0.35)
+        thr = effective_threshold(params, prob_thr)
     prob = chans.max(axis=0)
     pls, _ = instance_a(prob > thr, KAPPA_MAX, params, channels=chans, prob=prob)
     return pls
+
+
+def effective_threshold(params: dict, prob_thr):
+    """The foreground threshold the model arm will actually use.
+
+    CLI wins over the params file, matching predict.py and track.py. The old order let the
+    params file's prob_thr shadow --prob-thr entirely, so a threshold sweep would have silently
+    held the threshold constant and produced a perfectly flat curve. It lives in one function
+    so that the value printed at startup cannot drift away from the value used.
+    """
+    return prob_thr if prob_thr is not None else params.get("prob_thr", 0.35)
+
+
+def missing_predictions(seqs, pred_dir: str) -> list:
+    """Frames in ``seqs`` with no cached ``.npz``, checked BEFORE any scoring starts.
+
+    Discovering this inside the scoring loop means a 300-frame run burns the whole oracle arm
+    -- printing its complete-looking row -- before refusing on the model arm.
+    """
+    out = []
+    for frames in seqs.values():
+        for _, path, _ in frames:
+            npz = os.path.join(pred_dir, os.path.basename(path).replace(".h5", ".npz"))
+            if not os.path.exists(npz):
+                out.append(os.path.basename(path))
+    return out
 
 
 def assign_to_gt(pred, gt, gt_ids, tol=6.0):
@@ -156,9 +193,19 @@ def score(seqs, masks, pred_dir, params, prob_thr) -> dict:
                 j = next((idx for idx, p in enumerate(det_per_frame[k])
                           if idx not in claimed[k] and
                           (p is poly or np.array_equal(np.asarray(p), np.asarray(poly)))), None)
-                if j is not None:
-                    claimed[k].add(j)
-                seq_ids.append(owner[k][j] if j is not None else None)
+                if j is None:
+                    # Unlike ``owner[k][j] is None`` -- which merely says this detection follows
+                    # no GT object and is ordinary -- a failed lookup means the correspondence
+                    # is broken. Swallowing it shortens ``named`` and so undercounts links AND
+                    # switches, and switch_rate = switches/max(links,1) would read 0.000, a
+                    # perfect score, from total failure. The deployment tool refuses this same
+                    # condition; the harness that produces the published number must not be
+                    # more permissive than the tool.
+                    raise RuntimeError(
+                        f"track {tr.track_id} has a polyline in frame {k} matching no unclaimed "
+                        f"detection; the identity-switch count would be silently wrong.")
+                claimed[k].add(j)
+                seq_ids.append(owner[k][j])
             named = [x for x in seq_ids if x is not None]
             switches += sum(1 for x, y in zip(named, named[1:]) if x != y)
             links += max(len(named) - 1, 0)
@@ -225,7 +272,7 @@ def main() -> None:
     ap.add_argument("--params", default="src/instance/params_a_model_synthtuned.json")
     ap.add_argument("--prob-thr", type=float, default=None,
                     help="foreground threshold for the model arm; overrides the params file. "
-                         "Default: whatever the params file says.")
+                         "Default: the params file's prob_thr, or 0.35 if it has none.")
     ap.add_argument("--out-json", default=None)
     args = ap.parse_args()
 
@@ -234,12 +281,19 @@ def main() -> None:
     seqs = load_sequences(args.data, args.split)
     if not seqs:
         raise SystemExit(f"no {args.split} sequences under {args.data}")
-    thr_eff = args.prob_thr if args.prob_thr is not None else params.get("prob_thr", 0.35)
+    which = ["oracle", "model"] if args.masks == "both" else [args.masks]
+    if "model" in which:
+        gone = missing_predictions(seqs, args.pred_dir)
+        if gone:
+            raise SystemExit(
+                f"{len(gone)} of {sum(len(v) for v in seqs.values())} frames have no prediction "
+                f"in {args.pred_dir} (e.g. {', '.join(gone[:3])}). Refusing to score a partial "
+                f"model arm against a complete oracle arm.")
+    thr_eff = effective_threshold(params, args.prob_thr)
     print(f"{len(seqs)} sequences, {sum(len(v) for v in seqs.values())} frames"
           + (f", model threshold {thr_eff:.3f}" if args.masks in ("model", "both") else "")
           + "\n")
 
-    which = ["oracle", "model"] if args.masks == "both" else [args.masks]
     report = {}
     hdr = f"{'input':8s} {'det/frame':>10s} {'switches':>10s} {'switch rate':>12s} " \
           f"{'complete':>9s} {'trk/obj':>8s} | {'found':>6s} {'compl|det':>10s} " \

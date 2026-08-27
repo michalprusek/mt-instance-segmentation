@@ -98,3 +98,103 @@ def test_detected_frac_is_a_per_object_rate_not_a_per_frame_one():
     assert r2["detected_frac"] == pytest.approx(2 / 3)
     assert r2["detected_frac"] == pytest.approx(r5["detected_frac"])
     assert r2["n_objects"] == r5["n_objects"] == 3
+
+
+# --------------------------------------------------------------------------------------------
+# The headline claim of this harness is a switch RATE, and nothing pinned it.
+# --------------------------------------------------------------------------------------------
+
+def test_a_clean_sequence_has_no_identity_switches():
+    r = _score([[LONG_A, LONG_B]] * 3, [1, 2])
+    assert r["id_switches"] == 0
+    assert r["links"] > 0, "a zero denominator would make switch_rate 0.000 for free"
+    assert r["switch_rate"] == pytest.approx(0.0)
+
+
+def test_two_filaments_that_swap_places_are_counted_as_switches():
+    """The metric must be able to report a nonzero rate at all -- `switches += ...` deleted
+    outright would otherwise leave every test green while the headline number reads perfect."""
+    close_a = _straight(100, 20, 170)
+    close_b = _straight(106, 20, 170)          # 6 px apart: inside the association gates
+    frames = [[close_a, close_b], [close_b, close_a], [close_a, close_b]]
+    r = score(_sequence(frames, [1, 2]), "oracle", "", _PARAMS, 0.5)
+    assert r["links"] > 0
+    assert r["id_switches"] > 0, "a deliberate identity swap produced no switches"
+
+
+def test_switch_rate_has_a_real_denominator():
+    """`switch_rate = switches / max(links, 1)` reads 0.000 when links is 0, which is how a
+    total failure to recover the correspondence would have looked like a perfect score."""
+    r = _score([[LONG_A, LONG_B]] * 4, [1, 2])
+    assert r["links"] == pytest.approx(6), "2 objects x 3 frame steps"
+
+
+# --------------------------------------------------------------------------------------------
+# The pieces the model arm needs, exercised without a checkpoint.
+# --------------------------------------------------------------------------------------------
+
+def test_a_missing_prediction_is_refused_before_any_scoring(tmp_path):
+    """One absent .npz used to drop a whole sequence from the model arm while the oracle arm
+    kept it, so two rows printed as a comparison were scored on different populations."""
+    from eval_tracking import MissingPrediction, missing_predictions
+
+    seqs = _sequence([[LONG_A]] * 2, [1])
+    assert missing_predictions(seqs, str(tmp_path)) == ["seq000_f00.h5", "seq000_f01.h5"]
+
+    np.savez(tmp_path / "seq000_f00.npz", prob=np.zeros((1, 10, 10), np.float16))
+    assert missing_predictions(seqs, str(tmp_path)) == ["seq000_f01.h5"]
+
+    with pytest.raises(MissingPrediction, match="seq000_f01"):
+        score(seqs, "model", str(tmp_path), _PARAMS, None)
+
+
+def test_a_missing_prediction_does_not_kill_a_caller_that_handles_exceptions():
+    """SystemExit derives from BaseException and escapes `except Exception`, so a sweep driver
+    looping over thresholds would be terminated rather than told."""
+    from eval_tracking import MissingPrediction
+
+    assert issubclass(MissingPrediction, Exception)
+    assert not issubclass(MissingPrediction, SystemExit)
+
+
+def test_the_cli_threshold_beats_the_params_file():
+    from eval_tracking import effective_threshold
+
+    assert effective_threshold({"prob_thr": 0.44}, None) == pytest.approx(0.44)
+    assert effective_threshold({"prob_thr": 0.44}, 0.9) == pytest.approx(0.9)
+    assert effective_threshold({}, None) == pytest.approx(0.35)
+
+
+# --------------------------------------------------------------------------------------------
+# The rule that decides which object a track follows, and the unit that scales its speed.
+# --------------------------------------------------------------------------------------------
+
+def test_assign_to_gt_needs_half_the_detection_to_lie_on_one_object():
+    """This threshold defines the whole notion of 'detected', so it drives both the switch
+    count and detected_frac."""
+    from eval_tracking import assign_to_gt
+
+    gt = [_straight(60, 0, 100)]
+    mostly_on = np.stack([np.linspace(0, 100, 20), np.full(20, 60.0)], axis=1)
+    mostly_off = np.stack([np.linspace(0, 100, 20),
+                           np.concatenate([np.full(6, 60.0), np.full(14, 300.0)])], axis=1)
+    assert assign_to_gt([mostly_on], gt, [7]) == [7]
+    assert assign_to_gt([mostly_off], gt, [7]) == [None]
+    assert assign_to_gt([mostly_on], [], []) == [None]
+
+
+def test_the_stored_speed_is_lifted_into_the_eval_frame():
+    """Speeds are stored at native scale while every polyline here lives at 1.5x. Dropping the
+    conversion is the exact mismatch that once produced a false velocity underestimate, and it
+    still reaches the JSON even though the printed table omits velocity."""
+    import eval_tracking
+
+    moving = [[_straight(60, 20 + 6 * k, 170 + 6 * k)] for k in range(4)]
+    seqs = _sequence(moving, [1])
+    for _, _, fr in seqs[0]:
+        fr["attrs"]["speeds"] = [6.0]
+    r = score(seqs, "oracle", "", _PARAMS, 0.5)
+    assert r["velocity_n"] > 0, "no velocity was measured, so this pins nothing"
+    # The ratio is measured against 6.0 * UP; without the scaling it would be inflated by 1.5.
+    assert r["velocity_ratio_median"] == pytest.approx(1.0, abs=0.35)
+    assert eval_tracking.UP == 1.5

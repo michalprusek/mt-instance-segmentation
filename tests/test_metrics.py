@@ -115,3 +115,54 @@ def test_coverage_f1_of_a_perfect_prediction_is_near_one():
     gt_rc = np.stack([pts[:, 1], pts[:, 0]], axis=1)      # (row, col)
     rec, prec = coverage_f1(mask, gt_rc, tol=2.0)
     assert rec > 0.95 and prec > 0.95
+
+
+# ---- end tolerance (declared secondary metric variant, 2026-09-05) -------------------------------
+def _line_mask(x0, x1, y=50, shape=(100, 500)):
+    m = np.zeros(shape, bool)
+    m[y, x0:x1] = True
+    return m
+
+
+def _gt_line(x0, x1, y=50):
+    return np.array([[x0, y], [x1 - 1, y]], float)   # (x, y) vertices
+
+
+def test_end_tol_default_is_bit_identical():
+    from instance.metrics import centerline_f1
+    gt = [_gt_line(100, 300)]
+    pred = [_line_mask(100, 320)]                          # 20 px overshoot: precision 200/220 < 0.95
+    a = centerline_f1(pred, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95)
+    b = centerline_f1(pred, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95, end_tol=0.0)
+    assert a["tp"] == b["tp"] == 0 and a["pairs"][0]["precision"] == b["pairs"][0]["precision"]
+
+
+def test_end_tol_credits_small_overshoot_and_short_stop():
+    from instance.metrics import centerline_f1
+    gt = [_gt_line(100, 300)]
+    over = [_line_mask(100, 320)]                          # 20 px past the annotation's end
+    short = [_line_mask(115, 285)]                         # stops 15 px short at both ends: recall 0.85
+    for pred in (over, short):
+        strict = centerline_f1(pred, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95)
+        tol25 = centerline_f1(pred, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95, end_tol=25.0)
+        assert strict["tp"] == 0 and tol25["tp"] == 1, (strict["pairs"], tol25["pairs"])
+
+
+def test_end_tol_does_not_credit_long_overshoot_or_gap_bridge():
+    from instance.metrics import centerline_f1
+    gt = [_gt_line(100, 300)]
+    far = [_line_mask(100, 360)]                           # 60 px past the end: core still 0.86 on GT
+    r = centerline_f1(far, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95, end_tol=25.0)
+    assert r["tp"] == 0 and r["fp"] == 1
+    pieces = [_gt_line(100, 200), _gt_line(260, 360)]      # one filament annotated as two pieces
+    bridge = [_line_mask(100, 360)]
+    r = centerline_f1(bridge, pieces, tol=5.0, length_coverage=0.95, precision_coverage=0.95, end_tol=25.0)
+    assert r["tp"] == 0 and r["fp"] == 1 and r["fn"] == 2
+
+
+def test_end_tol_short_curve_keeps_full_set():
+    from instance.metrics import _core_points
+    pts = np.stack([np.full(30, 50.0), np.arange(30, dtype=float)], 1)
+    ends = np.array([[50.0, 0.0], [50.0, 29.0]], float)
+    assert len(_core_points(pts, ends, 25.0)) == 30        # 30 px curve, 25 px tolerance: nothing left -> no tolerance
+    assert len(_core_points(pts, ends, 5.0)) == 18

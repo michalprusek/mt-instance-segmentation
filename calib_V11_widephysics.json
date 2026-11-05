@@ -1,0 +1,93 @@
+{
+ "best_params": {
+  "density_center": 8,
+  "cluster_frac": 0.8138647589156749,
+  "contrast_center": 0.07,
+  "width_mean": 1.784620833614528,
+  "curve_base": 0.05042814000530208,
+  "ina": 0.8497144567262817,
+  "length_log_mean": 6.599535987223934,
+  "waviness_frame_prob": 0.3712808171137553,
+  "waviness_amp_center": 3.2511622901650354,
+  "detach_frame_prob": 0.8225517717104572,
+  "detach_prob": 0.4745055098785015,
+  "orient_kappa": 1.8,
+  "kink_prob": 0.2561867627451315,
+  "short_prob": 0.07706574557554885,
+  "psf_center": 0.705053467198796,
+  "height_base": 66.8806638076443,
+  "length_log_sigma": 0.55
+ },
+ "morph_tuned": true,
+ "target_fg": 1.6,
+ "got_fg": 1.4783288528462273,
+ "got_nematic": 0.3268428268465418,
+ "snr_correction": {
+  "multiplier": 3.0,
+  "reason": "labelled-MT SNR matched to human-annotated MT-34 GT: synth median 0.50 -> target 1.45; sweep scratchpad/snr_calib.py gives 1.36 at x3",
+  "date": "2026-08-13",
+  "parent": "calib_reg418_morph.json"
+ },
+ "gen_overrides": {
+  "length_range": [
+   10.0,
+   2000.0
+  ],
+  "frame_length_shift_range": [
+   -3.2,
+   0.4
+  ],
+  "frame_length_count_coupling": 0.6,
+  "height_base_nm_range": [
+   12.0,
+   95.0
+  ],
+  "height_crossing_guard_nm": 14.0,
+  "height_clamp_to_regime": true,
+  "height_along_std_nm": 6.0,
+  "detach_frame_prob": 0.35,
+  "contrast_rel_std": 0.2,
+  "psf_sigma_range": [
+   0.6,
+   2.4
+  ],
+  "ina_range": [
+   0.55,
+   1.35
+  ],
+  "bundle_size_range": [
+   2,
+   5
+  ],
+  "n_bend_range": [
+   1,
+   4
+  ],
+  "height_detach_nm_range": [
+   40.0,
+   260.0
+  ],
+  "bend_width_range": [
+   15.0,
+   90.0
+  ]
+ },
+ "length_prior_fix": {
+  "date": "2026-08-27",
+  "parent": "calib_reg418_morph_snr3.json",
+  "reason": "shipped length_range=(80,950) with length_log_mean=6.60 gave a median of 694 px and a degenerate 30 % pile-up on the upper clamp; 88.1 % of HTW GT lies below the lower clamp. Frame-level length scale + count coupling replaces it.",
+  "verified": "fg 1.25-1.93 % across the shift range; covers htw p50 29 px and 585 p50 358 px"
+ },
+ "photometry_fix": {
+  "date": "2026-08-28",
+  "variant": "V6_c070_narrow",
+  "reason": "the calibrated base-height range straddles the 56.4 nm interference zero-crossing; contrast_floor preserves the sign, so crossed segments render at full strength in the WRONG polarity. Measured: flipped label length 12.0% synth vs 2.2-3.4% real."
+ },
+ "provenance_wide_physics": {
+  "arm": 47,
+  "why": "the project's own standing rule (biased-corpus-domain-randomization) says the real corpus is a biased sample of an unknown experiment space, so PHYSICS priors must be randomised WIDE. An audit of the shipped calibration found several at x1.5-2.0: bundle_size 2-3, ina 0.7-1.1, psf_sigma 0.8-1.6, n_bend 1-2. Those are narrow for quantities that move with defocus, numerical aperture and preparation. This is a gap between the stated principle and the implementation, not a new idea.",
+  "supported_by": "arms 44/45 replicated on two seeds, 8/8: NARROWING a prior onto a measured real statistic costs 0.02-0.04 headline F1. Widening was null against the shipped prior, so the evidence supports 'do not narrow' more strongly than 'widen more'.",
+  "method_note": "widened symmetrically around the shipped band, never re-centred. Re-centring onto a real statistic is exactly the FIT that was measured to be harmful.",
+  "honest_prediction": "null. The evidence says shipped ~ WIDE > FIT, so the shipped priors already sit in the good regime and widening further has no measurement behind it. The reason to run it is that the audit exposed a principle/implementation gap and the GPUs are idle."
+ }
+}

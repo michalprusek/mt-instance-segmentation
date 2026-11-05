@@ -130,7 +130,8 @@ def _arm_at(poly: np.ndarray, arc_idx: int, which: str, window: float,
     pos = poly[0] if which == "start" else poly[-1]
     return ArmEnd(arc_idx=arc_idx, which=which, theta=theta, kappa=kappa,
                   pos=np.asarray(pos, dtype=float),
-                  ori=_ori_profile(channels, poly, which, window))
+                  ori=_ori_profile(channels, poly, which, window),
+                  arc_len=total_length(poly))
 
 
 def _build_arms(arcs, arc_ends, window: float, channels: np.ndarray | None):
@@ -187,7 +188,7 @@ def _walk(segments, partner, bridge_pts=None) -> list[np.ndarray]:
 
 
 def _link_free_ends(chains, kappa_max: float, p: dict,
-                    channels: np.ndarray | None, prob: np.ndarray | None):
+                    channels: np.ndarray | None, prob: np.ndarray | None, linker=None):
     """Join chains whose free ends continue each other across a foreground hole."""
     if p["link_max_gap"] <= 0 or len(chains) < 2:
         return chains
@@ -204,7 +205,13 @@ def _link_free_ends(chains, kappa_max: float, p: dict,
                            w_kappa=p["w_kappa"], w_gap=p["w_gap"],
                            c_open=p["c_open_link"], gap_len=None,
                            gap_floor=p["gap_floor"], w_ori=p["w_ori"],
-                           max_gap=p["link_max_gap"], allow=allow)
+                           max_gap=p["link_max_gap"], allow=allow,
+                           # Gap linking keeps the geometric cost by default: its c_open_link /
+                           # link_max_gap / bridge_thr were tuned together, and swapping the
+                           # scorer under them changes two things at once.
+                           scorer=(_make_scorer(linker, prob, p, is_gap_link=True)
+                                   if p.get("linker_gap", False) else None),
+                           p_open=p.get("p_open_link", p.get("p_open", 0.5)))
     partner = {}
     for i, j in pairs:
         pa = (arms[i].arc_idx, arms[i].which)
@@ -216,15 +223,107 @@ def _link_free_ends(chains, kappa_max: float, p: dict,
     return _walk(chains, partner)
 
 
+def _make_scorer(linker, prob, p, is_gap_link: bool):
+    """Wrap a :class:`instance.linker.Linker` into ``match_junction``'s scorer signature."""
+    if linker is None:
+        return None
+    from instance.linker import edge_features
+
+    def scorer(arms, i, j, n_arms):
+        f = edge_features(arms[i], arms[j], prob=prob, gap_floor=p["gap_floor"],
+                          n_arms=n_arms, is_gap_link=is_gap_link)
+        return float(linker.score(f[None])[0])
+    return scorer
+
+
+def _arc_overlap_frac(arc: np.ndarray, overlap: np.ndarray, thr: float) -> float:
+    """Fraction of an arc's pixels the multiplicity map marks as carrying two filaments."""
+    if len(arc) == 0:
+        return 0.0
+    h, w = overlap.shape
+    r = np.clip(np.rint(arc[:, 1]).astype(int), 0, h - 1)
+    c = np.clip(np.rint(arc[:, 0]).astype(int), 0, w - 1)
+    return float(np.mean(overlap[r, c] >= thr))
+
+
+def _pass_through_shared(arcs, arc_ends, junctions, arms_by_j, overlap, kappa_max, p):
+    """Let two filaments traverse an arc the multiplicity map says is shared.
+
+    `_absorb_crossing_bridges` documents its own limit: at shallow angles two filaments stay
+    skeletally fused over ``~4 * half_width / sin(alpha)`` px, and beyond ``bridge_max_len``
+    such an arc is kept because it could equally be a real segment. Read 35 measured the cost of
+    that irreducible choice -- the crossing is then two 3-arm junctions joined by a shared arc,
+    each of which can match only ONE pair, so one filament is always left open, and identity
+    falls from 0.944 (a well-formed 4-arm X) to 0.333.
+
+    The multiplicity map is the evidence that decides the ambiguity the docstring names. Where
+    an arc with a junction at BOTH ends is marked shared, the outer arms of its two junctions
+    are matched ACROSS it -- one `match_junction` over the pooled arms with the arc's own length
+    as the span, so the curvature bound is enforced over the true distance -- and each resulting
+    pair gets its own traversal of the arc.
+
+    Returns ``(extra_arcs, partner, consumed)``: copies to append, the port wiring they imply,
+    and the ports the ordinary per-junction matching must no longer touch.
+    """
+    thr, frac = p.get("ov_thr", 0.5), p.get("ov_frac", 0.5)
+    min_len = p.get("ov_min_len", 0.0)
+    extra_arcs, partner, consumed = [], {}, set()
+    for k, (j0, j1) in enumerate(arc_ends):
+        if j0 is None or j1 is None or j0 == j1 or len(arcs[k]) < 2:
+            continue
+        L = total_length(arcs[k])
+        if L < min_len or _arc_overlap_frac(arcs[k], overlap, thr) < frac:
+            continue
+        tagged = [(sd, a) for sd, jid in ((0, j0), (1, j1))
+                  for a in arms_by_j.get(jid, []) if a.arc_idx != k]
+        if len(tagged) < 2:
+            continue
+        outer = [a for _, a in tagged]
+        side = [sd for sd, _ in tagged]
+        pairs = [(i, j) for i, j in
+                 match_junction(outer, kappa_max=kappa_max, w_theta=p["w_theta"],
+                                w_kappa=p["w_kappa"], w_gap=p["w_gap"], c_open=p["c_open"],
+                                gap_len=float(L), gap_floor=p["gap_floor"], w_ori=p["w_ori"])
+                 if side[i] != side[j]]
+        if not pairs:
+            continue
+        # the original arc carries the first pair; each further pair gets its own copy
+        for n, (i, j) in enumerate(pairs):
+            a, b = outer[i], outer[j]
+            if side[i] == 1:
+                a, b = b, a                       # `a` is always the j0 side
+            if n == 0:
+                ai = k
+            else:
+                ai = len(arcs) + len(extra_arcs)
+                extra_arcs.append(arcs[k].copy())
+            pa, pb = (a.arc_idx, a.which), (b.arc_idx, b.which)
+            partner[pa] = ((ai, "start"), j0)
+            partner[(ai, "start")] = (pa, j0)
+            partner[(ai, "end")] = (pb, j1)
+            partner[pb] = ((ai, "end"), j1)
+            consumed |= {pa, pb, (ai, "start"), (ai, "end")}
+    return extra_arcs, partner, consumed
+
+
 def instance_a(mask: np.ndarray, kappa_max: float, params: dict | None = None,
                channels: np.ndarray | None = None,
-               prob: np.ndarray | None = None
-               ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+               prob: np.ndarray | None = None,
+               linker=None,
+               overlap: np.ndarray | None = None) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Instance-segment a binary foreground mask. Returns ``(polylines, masks)``.
 
     ``channels`` (K, H, W) enables the orientation-agreement term; ``prob`` (H, W) enables the
     bridge-evidence check when linking across gaps. Both are optional and A degrades to its
     geometry-only behaviour without them.
+
+    ``overlap`` (H, W) is a predicted multiplicity map; where it marks an arc with a junction
+    at both ends as carrying two filaments, both filaments are allowed to traverse it (see
+    :func:`_pass_through_shared`). Passing None leaves every port wiring exactly as before.
+
+    ``linker`` (a :class:`instance.linker.Linker`) replaces the hand-crafted pairing cost with
+    a learned one, leaving the hard curvature bound and the global matching untouched. Passing
+    None keeps the geometric behaviour exactly, so the learned cost is its own ablation.
     """
     p = {**default_params(), **(params or {})}
     mask = np.asarray(mask, dtype=bool)
@@ -238,20 +337,32 @@ def instance_a(mask: np.ndarray, kappa_max: float, params: dict | None = None,
     arcs = [resample(a, ds=p["ds"]) for a in g.arcs]
     arms_by_j = _build_arms(arcs, g.arc_ends, p["window"], channels)
 
+    junction_scorer = _make_scorer(linker, prob, p, is_gap_link=False)
     partner: dict = {}
+    consumed: set = set()
+    arc_ends = list(g.arc_ends)
+    if overlap is not None:
+        extra, partner, consumed = _pass_through_shared(
+            arcs, arc_ends, g.junctions, arms_by_j, overlap, kappa_max, p)
+        arcs = arcs + extra
     for jid, arms in arms_by_j.items():
-        for i, j in match_junction(arms, kappa_max=kappa_max, w_theta=p["w_theta"],
+        free = [a for a in arms if (a.arc_idx, a.which) not in consumed]
+        if len(free) < 2:
+            continue
+        for i, j in match_junction(free, kappa_max=kappa_max, w_theta=p["w_theta"],
                                    w_kappa=p["w_kappa"], w_gap=p["w_gap"],
                                    c_open=p["c_open"], gap_len=None,
-                                   gap_floor=p["gap_floor"], w_ori=p["w_ori"]):
-            pa = (arms[i].arc_idx, arms[i].which)
-            pb = (arms[j].arc_idx, arms[j].which)
+                                   gap_floor=p["gap_floor"], w_ori=p["w_ori"],
+                                   scorer=junction_scorer,
+                                   p_open=p.get("p_open", 0.5)):
+            pa = (free[i].arc_idx, free[i].which)
+            pb = (free[j].arc_idx, free[j].which)
             partner[pa] = (pb, jid)
             partner[pb] = (pa, jid)
 
     chains = _walk(arcs, partner, bridge_pts=g.junctions)
     chains = [c for c in chains if total_length(c) >= p["min_length"] * 0.5]
-    chains = _link_free_ends(chains, kappa_max, p, channels, prob)
+    chains = _link_free_ends(chains, kappa_max, p, channels, prob, linker)
 
     polylines = []
     for chain in chains:

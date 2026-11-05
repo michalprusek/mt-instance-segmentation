@@ -38,6 +38,7 @@ class ArmEnd:
     kappa: float                     # signed curvature at that end, rad/px, outward
     pos: np.ndarray                  # (x, y) of the terminal vertex
     ori: np.ndarray | None = None    # orientation-channel profile over the tangent window
+    arc_len: float = 0.0             # length of the arc this end belongs to (learned cost only)
 
 
 def _ori_mismatch(a: ArmEnd, b: ArmEnd) -> float:
@@ -105,7 +106,9 @@ def match_junction(arms: list[ArmEnd], kappa_max: float,
                    gap_len: float | None = 4.0,
                    gap_floor: float = 4.0, w_ori: float = 0.0,
                    max_gap: float | None = None,
-                   allow: "callable | None" = None) -> list[tuple[int, int]]:
+                   allow: "callable | None" = None,
+                   scorer: "callable | None" = None,
+                   p_open: float = 0.5) -> list[tuple[int, int]]:
     """Pair the arms of one junction. Returns index pairs into ``arms``.
 
     Unmatched arms are simply absent from the result -- that is the "leave open" outcome.
@@ -118,6 +121,12 @@ def match_junction(arms: list[ArmEnd], kappa_max: float,
     than that (used when linking free chain ends across foreground holes), and ``allow`` is an
     optional predicate for extra evidence -- e.g. requiring that the image actually shows
     something along the bridge.
+
+    ``scorer(arms, i, j, n_arms) -> float`` replaces the hand-crafted cost with a learned
+    probability that the two arms belong to the same microtubule; the matching weight becomes
+    ``score - p_open``, so ``p_open`` plays the role ``c_open`` plays for the geometric cost.
+    ``kappa_max`` is enforced identically in both modes -- a learned score must not be able to
+    buy its way through a physically impossible kink.
     """
     n = len(arms)
     if n < 2:
@@ -136,7 +145,8 @@ def match_junction(arms: list[ArmEnd], kappa_max: float,
                                             w_theta, w_kappa, w_gap, w_ori, gap_floor)
             if kappa_implied > kappa_max:
                 continue                      # physically impossible: forbidden, not costly
-            weight = 2.0 * c_open - cost
+            weight = (scorer(arms, i, j, n) - p_open) if scorer is not None \
+                else (2.0 * c_open - cost)
             if weight > 0:
                 g.add_edge(i, j, weight=weight)
 

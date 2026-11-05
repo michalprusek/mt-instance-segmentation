@@ -1,0 +1,21 @@
+{
+ "prob_thr": 0.97,
+ "merge_radius": 5.0,
+ "bridge_max_len": 11.535402577528444,
+ "window": 28.4061495451,
+ "w_theta": 2.4108987954215335,
+ "w_kappa": 16.10643963709496,
+ "w_gap": 0.023943431708221545,
+ "c_open": 3.5105243273445317,
+ "min_length": 15.0,
+ "smooth_size": 11,
+ "gap_floor": 9.580777678689557,
+ "w_ori": 2.6027267692410323,
+ "link_max_gap": 35.74047484783207,
+ "c_open_link": 2.31855842251525,
+ "bridge_thr": 0.07121686958579185,
+ "min_arc_len": 3,
+ "ds": 2.0,
+ "half_width": 1.0,
+ "_derivation": "min_length DERIVED 2026-09-13, never tuned on a real block. Rule declared before the numbers existed: R1 = 2*tol = 10, R2 = 3*tol = 15, R3 = the in-domain optimum on EXACT generator GT; take R3 if it lies inside [R1, R2], else the nearer of R1/R2. MEASURED in-domain (headline 0.80/0.80, best threshold per row): 5 -> 0.6209, 10 -> 0.6311, 15 -> 0.6408, 20 -> 0.6467, 30 -> 0.6349, 44.74 (shipped) -> 0.6138. R3 = 20 lies OUTSIDE [10, 15], so the rule takes 15.0 -- which is also instancer_a.DEFAULTS, i.e. the architecture's own unfitted value. Cost of obeying the rule instead of fitting: 0.006 in domain. That is the price of a derived constant and it is paid deliberately."
+}

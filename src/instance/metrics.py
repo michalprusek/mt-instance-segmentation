@@ -54,6 +54,28 @@ def _skel_points(mask: np.ndarray) -> np.ndarray:
         np.zeros((0, 2), dtype=np.float32)
 
 
+def _skel_ends(mask: np.ndarray) -> np.ndarray:
+    """Free ends of the mask's skeleton: skeleton pixels with exactly one 8-neighbour, (N, 2) as (y, x)."""
+    skel = skeletonize(mask).astype(np.uint8)
+    if not skel.any():
+        return np.zeros((0, 2), dtype=np.float32)
+    pad = np.pad(skel, 1)
+    nb = sum(pad[1 + dy:pad.shape[0] - 1 + dy, 1 + dx:pad.shape[1] - 1 + dx]
+             for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dy, dx) != (0, 0))
+    ys, xs = np.where((skel > 0) & (nb == 1))
+    return np.stack([ys, xs], axis=1).astype(np.float32) if len(ys) else np.zeros((0, 2), dtype=np.float32)
+
+
+def _core_points(pts: np.ndarray, ends: np.ndarray, end_tol: float, min_keep: int = 5) -> np.ndarray:
+    """``pts`` farther than ``end_tol`` from every point of ``ends``. A curve too short to keep at
+    least ``max(min_keep, 20 %)`` of its pixels gets no tolerance (its full set is returned)."""
+    if end_tol <= 0 or len(pts) == 0 or len(ends) == 0:
+        return pts
+    d, _ = cKDTree(ends).query(pts, k=1)
+    core = pts[d > end_tol]
+    return core if len(core) >= max(min_keep, int(0.2 * len(pts))) else pts
+
+
 def _polyline_pixels(points: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
     mask = rasterise_polyline(points, shape)
     ys, xs = np.where(mask)
@@ -79,8 +101,17 @@ def centerline_f1(pred_masks: Sequence[np.ndarray],
                   gt_polylines: Sequence[np.ndarray],
                   tol: float = 5.0,
                   length_coverage: float = 0.80,
-                  precision_coverage: float | None = None) -> dict:
-    """Strict centerline-F1 for one image. See the module docstring for provenance."""
+                  precision_coverage: float | None = None,
+                  end_tol: float = 0.0) -> dict:
+    """Strict centerline-F1 for one image. See the module docstring for provenance.
+
+    ``end_tol`` (declared 2026-09-05 as the ONE secondary metric variant, default off = the
+    primary metric, bit-identical): a symmetric end tolerance in pixels of the eval frame. GT
+    samples within ``end_tol`` of the GT polyline's own two ends are ignored when its coverage
+    (recall) is computed, and prediction samples within ``end_tol`` of the prediction skeleton's
+    free ends are ignored when its precision is computed. It credits a prediction that follows a
+    filament a little past the annotation's end, or stops a little short of it, without changing
+    the GT; a prediction bridging two GT pieces, or extending far beyond the end, still fails."""
     pred_list = list(pred_masks)
     gt_list = list(gt_polylines)
     if not pred_list and not gt_list:
@@ -100,6 +131,15 @@ def centerline_f1(pred_masks: Sequence[np.ndarray],
 
     pred_pts_list = [_skel_points(m) for m in pred_list]
     gt_pts_list = [_polyline_pixels(p, (H, W)) for p in gt_list]
+    if end_tol > 0:
+        pred_core = [_core_points(pts, _skel_ends(m), end_tol) for pts, m in zip(pred_pts_list, pred_list)]
+        gt_core = []
+        for pts, poly in zip(gt_pts_list, gt_list):
+            poly = np.asarray(poly, dtype=np.float32)
+            ends = np.stack([poly[0][::-1], poly[-1][::-1]], 0) if len(poly) >= 2 else np.zeros((0, 2), np.float32)
+            gt_core.append(_core_points(pts, ends, end_tol))
+    else:
+        pred_core, gt_core = pred_pts_list, gt_pts_list
 
     Np, Ng = len(pred_pts_list), len(gt_pts_list)
     if Np == 0:
@@ -115,7 +155,11 @@ def centerline_f1(pred_masks: Sequence[np.ndarray],
     ]
     for i in range(Np):
         for j in range(Ng):
-            p, r, h = _pair_score(pred_pts_list[i], gt_pts_list[j], tol)
+            if end_tol > 0:
+                p, _, h = _pair_score(pred_core[i], gt_pts_list[j], tol)
+                _, r, _ = _pair_score(pred_pts_list[i], gt_core[j], tol)
+            else:
+                p, r, h = _pair_score(pred_pts_list[i], gt_pts_list[j], tol)
             score_grid[i][j] = (p, r, h)
             f1 = 0.0 if (p + r) == 0 else 2 * p * r / (p + r)
             cost[i, j] = 1.0 - f1

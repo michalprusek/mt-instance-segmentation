@@ -21,3 +21,6 @@ venv/
 
 # stray run logs (produced by remote chains)
 *.log
+
+# browser-automation snapshots and screenshots (may show signed-in pages)
+.playwright-mcp/

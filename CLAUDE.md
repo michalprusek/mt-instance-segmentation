@@ -27,7 +27,8 @@ python -m mt_bench.gt_stats data/real/mt34_eval          # κ_max + crossing/par
 python -c "from mt_bench.overlay import render_all; render_all('data/real/mt34_eval', \
     'data/enc_sensitivity_testset/mt34_overlays')"       # the verification gate — LOOK at these
 ```
-**All heavier runs go on tulen** (`/home/prusek/mt_enc_exp/mt34_work`, 32 cores):
+**All heavier runs go on tulen** (`/disk2/prusek/mt_work/mt34_work`; runs and dumps in the outer
+`/disk2/prusek/mt_work/{runs,preds}`; python `/scratch/prusek/envs/nnunet/bin/python`; 32 cores):
 `scripts/run_oracle_eval.py` (instancer benchmark), `scripts/tune_instancer.py` (Optuna),
 `scripts/semantic_compare.py`, `scripts/predict_v4b_mt34.py`, `scripts/nnunet_*`,
 `scripts/tulen_tuning_chain.sh`, `scripts/final_test_run.sh`, `scripts/viz_instancers.py`.
@@ -48,10 +49,15 @@ Two environment traps: `optuna` needs the `pysqlite3` shim `synth/calibrate.py` 
   caused two silent bugs so far and each has a regression test.
 
 ## Standing constraints & facts
-- **The synthetic→real domain gap is the wall, not the decoder.** Prior synth-trained
-  decoders (WEAVE, end-to-end Object Condensation) all failed on real; TARDIS (real-trained)
-  works. Spend effort on the **synthetic dataset realism** (density, IRM appearance, crossing/
-  parallel stats), not on inventing decoders.
+- **The synthetic→real domain gap is the larger share of the loss; the decoder is the smaller one,
+  but not zero** (amended 2026-10-06). Prior synth-trained *learned* decoders (WEAVE, end-to-end
+  Object Condensation, the LPC strip verifier / junction head) all failed or added nothing on real;
+  TARDIS (real-trained) works. What did gain is assembly on the unchanged mask: a link score fitted
+  on synthetic links + a global matching of arc ends ("instancer L", `scripts/lpc/`,
+  `src/instance/params_l_hand.json`) is worth ≈ +0.03–0.04 on roi303 v2 VAL and +0.01–0.05 on htw
+  VAL over greedy bridging. So: spend most effort on **synthetic dataset realism** (density, IRM
+  appearance, crossing/parallel stats); a decoder change must first show a ceiling on the unchanged
+  mask and be fitted in domain — do not re-propose raw-image verifiers or learned junction heads.
 - **Eval = strict centerline-F1** (tol=5, length & precision coverage 0.95) on **MT-34**
   (`data/real/mt34_eval/`), at 1.5× upscale, reported **per source** (Alice / new-22) and pooled,
   clean vs chimera. Frames with zero GT are excluded from the macro mean but keep contributing

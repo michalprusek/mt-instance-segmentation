@@ -142,3 +142,31 @@ or does the point cloud over-fire even from a clean foreground?" On MT-34 the v4
 over-fire (predicted fg% 1.93 vs ~1.6 in-domain synth) and semantic recall is 0.92-0.999; the
 model-mask instance gap comes from over-segmentation of a thicker/noisier foreground plus a field
 stop the generator never modelled -- not from over-firing.
+
+## UPDATE 2026-10-05 — RELINK 1-D closed; proposal LPC (lifted path cover + strip verifier)
+
+- **RELINK 1-D (one multiplier on `w_theta`)**: pooled synth F1 rises by recall only and junction
+  identity falls monotonically with the multiplier (−4.8 % at the rule's pick 1.75, limit −2 %).
+  A fixed-rule retry on a fresh set is declared (`docs/TODO.md` 2026-10-05 22:15).
+- **In-domain ceiling**: a perfect band through instancer A scores 0.686 on dense synthetic scenes;
+  the model is at 93 % of it. The linker, not the mask, is the in-domain limit.
+- **Literature sweep 2026-10-05** (two agents, IDs in the spec): Liu et al. 2019
+  (DOI 10.1109/CVPRW.2019.00021) is the published precedent of the K=6 orientation head that
+  failed here (ARM 51); Eckstein/Funke 2020 (arXiv 2009.08371) is the closest linker (ILP on a
+  candidate graph with summed evidence, 3D EM); DeFiNe (arXiv 1601.00847) is an unlearned path
+  cover that allows overlaps. Not found: a learned per-curve likelihood-ratio acceptance replacing
+  the pixel threshold, or a path cover with capacity per (x, y, theta) cell on a learned cost.
+- **Proposal**: `docs/superpowers/specs/2026-10-05-lifted-path-cover-design.md`. Unbuilt; four
+  screens with kill lines precede any training.
+
+## UPDATE 2026-10-06 — LPC screens read
+
+S0 pass / S1 pass vs its declared comparator with both premises unsupported / S2 void-null; details in
+`docs/TODO.md` (2026-10-06 08:25, 09:05, 09:30) and `docs/protocol.md` §25. Facts worth carrying:
+(i) the oracle over the instancer's own candidates reaches 0.78–0.84 where the instancer reaches 0.61–0.65
+on the same mask; (ii) a looser cut is a WORSE candidate source; (iii) candidate links are classifiable
+at AUC 0.98–0.99 / AP 0.89–0.92 from the map alone, hand features nearly as well, the raw image adds
+nothing; (iv) junction matching is 0.92 / 0.997 at clean through-crossings — crossing identity is lost
+in arc-graph construction, not in pairing; (v) the missing edge type in the instancer is a link between
+a free end and a junction arm (inference).
+

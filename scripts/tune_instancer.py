@@ -52,8 +52,14 @@ KAPPA_MAX = 0.25
 
 
 def prepare(data_dir: str, split: str, masks: str = "oracle",
-            pred_dir: str | None = None, prob_thr: float = 0.35) -> list[dict]:
-    """Cache the per-frame inputs once; a trial then costs only the instancer + the metric."""
+            pred_dir: str | None = None, prob_thr: float = 0.35,
+            up: float = UP, use_fov: bool = True) -> list[dict]:
+    """Cache the per-frame inputs once; a trial then costs only the instancer + the metric.
+
+    ``up`` is the inference scale of the cached maps (1.5 for the historical MT-34 protocol,
+    1.0 for the campaign's native screen); ``use_fov=False`` mirrors ``eval_v5.py --no-fov``.
+    """
+    UP = up  # noqa: N806 -- shadows the module default on purpose
     frames = []
     for path in sorted(glob.glob(os.path.join(data_dir, "*.h5"))):
         fr = read_frame_h5(path)
@@ -70,11 +76,12 @@ def prepare(data_dir: str, split: str, masks: str = "oracle",
             chans = npz["prob"].astype(np.float32)
             if chans.shape[1:] != hi:
                 raise SystemExit(f"{path}: prediction {chans.shape[1:]} != {hi}")
-            fv = zoom(fov_mask(fr["image"]).astype(np.uint8), UP, order=0).astype(bool)
-            fv = np.pad(fv, ((0, max(0, hi[0] - fv.shape[0])),
-                             (0, max(0, hi[1] - fv.shape[1]))),
-                        constant_values=True)[:hi[0], :hi[1]]
-            chans = chans * fv[None, :, :]
+            if use_fov:
+                fv = zoom(fov_mask(fr["image"]).astype(np.uint8), UP, order=0).astype(bool)
+                fv = np.pad(fv, ((0, max(0, hi[0] - fv.shape[0])),
+                                 (0, max(0, hi[1] - fv.shape[1]))),
+                            constant_values=True)[:hi[0], :hi[1]]
+                chans = chans * fv[None, :, :]
         frames.append({
             "name": os.path.basename(path),
             "chans": chans,
@@ -121,9 +128,9 @@ def evaluate(frames, method: str, kappa_max: float, params: dict) -> float:
     return float(aggregate_benchmark(rows)["mean_f1"])
 
 
-def space_a(t: optuna.Trial, masks: str = "oracle") -> dict:
+def space_a(t: optuna.Trial, masks: str = "oracle", search_prob_thr: bool = True) -> dict:
     extra = {}
-    if masks == "model":
+    if masks == "model" and search_prob_thr:
         # On thick, noisy predicted foreground the BINARISATION threshold controls skeleton
         # quality more than any matching weight -- the project's own SAM 3 record has a
         # confidence sweep moving F1 0.39 -> 0.71. Leaving it fixed would spend the budget
@@ -193,7 +200,15 @@ def main() -> None:
     ap.add_argument("--split", default="val")
     ap.add_argument("--masks", default="oracle", choices=["oracle", "model"])
     ap.add_argument("--pred-dir", default=None)
-    ap.add_argument("--prob-thr", type=float, default=0.35)
+    ap.add_argument("--prob-thr", type=float, default=0.35,
+                    help="binarisation threshold of model maps; FIXED unless --search-prob-thr "
+                         "(the campaign's eval sweeps the threshold itself, so the matcher "
+                         "weights must be tuned at the regime the read uses)")
+    ap.add_argument("--search-prob-thr", action="store_true",
+                    help="let Optuna search prob_thr in [0.2, 0.75] (the historical behaviour)")
+    ap.add_argument("--up", type=float, default=UP,
+                    help="inference scale of the cached maps (1.5 historical, 1.0 native)")
+    ap.add_argument("--no-fov", action="store_true", help="mirror eval_v5.py --no-fov")
     ap.add_argument("--n-trials", type=int, default=120)
     ap.add_argument("--n-jobs", type=int, default=5)
     ap.add_argument("--tune-kappa", action="store_true",
@@ -207,7 +222,8 @@ def main() -> None:
     args = ap.parse_args()
 
     os.makedirs(args.log, exist_ok=True)
-    frames = prepare(args.data, args.split, args.masks, args.pred_dir, args.prob_thr)
+    frames = prepare(args.data, args.split, args.masks, args.pred_dir, args.prob_thr,
+                     up=args.up, use_fov=not args.no_fov)
     n_empty = sum(1 for f in frames if not f["gt"])
     print(f"prepared {len(frames)} {args.split} frames "
           f"({n_empty} with zero GT -> micro only)", flush=True)
@@ -215,7 +231,8 @@ def main() -> None:
     space = SPACES[args.method]
 
     def objective(trial: optuna.Trial) -> float:
-        params = space(trial, args.masks)
+        params = (space(trial, args.masks, args.search_prob_thr) if args.method == "a"
+                  else space(trial, args.masks))
         kappa = (trial.suggest_float("kappa_max", 0.15, 0.45)
                  if args.tune_kappa else KAPPA_MAX)
         return evaluate(frames, args.method, kappa, params)
@@ -237,6 +254,8 @@ def main() -> None:
     best = dict(study.best_params)
     best.pop("kappa_max", None)
     best.update(FIXED[args.method])
+    if args.method == "a" and args.masks == "model" and not args.search_prob_thr:
+        best["prob_thr"] = args.prob_thr          # documented, not tuned; eval sweeps it anyway
 
     tag = (f"params_{args.method}"
            + ("_model" if args.masks == "model" else "")

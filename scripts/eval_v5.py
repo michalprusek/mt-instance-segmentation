@@ -39,6 +39,75 @@ from mt_bench.fov import fov_mask  # noqa: E402
 UP, KAPPA_MAX, K_ORI = 1.5, 0.25, 6
 
 
+def eval_frame_shape(shape, up: float = UP):
+    """Shape of the 1.5x eval frame for a native image of ``shape`` -- scipy.ndimage.zoom's own
+    rounding, so a probability map resampled to this shape lines up with ``zoom(gt_mask, UP)``."""
+    return tuple(int(round(s * up)) for s in shape)
+
+
+def resample_to_eval(ch, target_hw):
+    """Resample a ``[C, h, w]`` probability stack to the eval frame, bilinear per channel.
+
+    Identity when the shape already matches, so the historical path (network run on the 1.5x
+    image) is bit-for-bit unchanged. The point of this function is the OTHER path: run the
+    network at the scale it was TRAINED at (the synthetic frames are rendered on native-resolution
+    backgrounds and never upscaled -- see ``train_v5.OnlineDS``), and move to the eval frame only
+    afterwards, on the probabilities. Whether the 1.5x train/test scale mismatch costs anything is
+    then a per-model threshold sweep away, with no retraining."""
+    if tuple(ch.shape[1:]) == tuple(target_hw):
+        return ch
+    f = (target_hw[0] / ch.shape[1], target_hw[1] / ch.shape[2])
+    out = np.stack([zoom(np.asarray(c, np.float32), f, order=1, mode="nearest") for c in ch]).astype(np.float32)
+    if tuple(out.shape[1:]) != tuple(target_hw):
+        raise ValueError(f"resampled to {out.shape[1:]}, expected {target_hw}")
+    return out
+
+
+def local_norm(img, support: int, grid: int = 8):
+    """Normalise with the SAME percentile support the network was trained under.
+
+    Training normalises a 768 render whole and then crops 512 out of it, so the network always
+    sees a crop whose 1/99 percentiles came from a ~768 px neighbourhood. Evaluation normalises a
+    whole real frame, which is 1024-2048 px and contains debris, rims and edges that widen the
+    span. Measured: the same real pixels reach the network 3.2x weaker at full-frame support than
+    at 768 support, and because the normalisation CLIPS to [0, 1] this is not an affine change the
+    network's InstanceNorm could absorb -- feeding both versions to the shipped checkpoint moves
+    max |dp| to 1.0 and nearly doubles the foreground.
+
+    Percentiles are computed on a coarse grid of `support`-sized windows and bilinearly
+    interpolated, so the transform is smooth and has no tile seams.
+    """
+    from scipy.ndimage import zoom as _zoom
+    img = np.asarray(img, float)
+    h, w = img.shape
+    if support <= 0 or min(h, w) <= support:
+        lo, hi = np.percentile(img, [1, 99])
+        return np.clip((img - lo) / (hi - lo + 1e-9), 0, 1).astype(np.float32)
+    ys = np.linspace(0, max(h - support, 0), grid).astype(int)
+    xs = np.linspace(0, max(w - support, 0), grid).astype(int)
+    LO = np.empty((grid, grid)); HI = np.empty((grid, grid))
+    for i, y in enumerate(ys):
+        for j, x in enumerate(xs):
+            LO[i, j], HI[i, j] = np.percentile(img[y:y + support, x:x + support], [1, 99])
+    lo = _zoom(LO, (h / grid, w / grid), order=1)[:h, :w]
+    hi = _zoom(HI, (h / grid, w / grid), order=1)[:h, :w]
+    return np.clip((img - lo) / (hi - lo + 1e-9), 0, 1).astype(np.float32)
+
+
+def checkpoint_in_channels(state) -> int:
+    """Input width of the FIRST conv, read off the checkpoint: 3 for a plain run, 3 + N when the
+    run prepended a classical prior bank (``train_v5.py --priors``). Every other conv in these
+    networks is at least 32 wide, so the minimum over 4-D weights is the stem."""
+    convs = [v for v in state.values() if getattr(v, "ndim", 0) == 4]
+    if not convs:
+        return 3
+    produced = {int(v.shape[0]) for v in convs}            # widths some layer OUTPUTS
+    # The stem is the only conv whose input width nobody produces (3, or 3 + priors). A 1x1
+    # head reading 32 features would otherwise win a plain minimum on a 38-channel run.
+    external = [int(v.shape[1]) for v in convs if int(v.shape[1]) not in produced]
+    return min(external) if external else int(convs[0].shape[1])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     src = ap.add_mutually_exclusive_group(required=True)
@@ -58,7 +127,33 @@ def main() -> None:
     ap.add_argument("--thrs", default="0.35,0.45,0.55,0.65,0.75,0.85")
     ap.add_argument("--params", default="src/instance/params_a_model_synthtuned.json")
     ap.add_argument("--fg-head", action="store_true")
+    ap.add_argument("--prob-channel", type=int, default=-1,
+                    help="decode from this output channel only (0 = the existence head of a "
+                         "--head heat checkpoint). -1 = historical behaviour (max over the "
+                         "orientation channels, or the union head with --fg-head).")
+    ap.add_argument("--norm-support", type=int, default=0,
+                    help="normalise with percentiles from windows of this size instead of the "
+                         "whole frame. 0 = the historical whole-frame behaviour. 768 matches the "
+                         "support the network was TRAINED under (see local_norm).")
+    ap.add_argument("--cov", type=float, default=0.95,
+                    help="length AND precision coverage. 0.95 is the strict rule every campaign "
+                         "number was read under; 0.80 is the field convention the user chose as "
+                         "the headline on 2026-09-09.")
+    ap.add_argument("--tol", type=float, default=5.0)
+    ap.add_argument("--end-tol", type=float, default=0.0,
+                    help="tolerated overshoot past an annotation end, in px (0 = none)")
     ap.add_argument("--no-fov", action="store_true")
+    ap.add_argument("--fusion", default="gauss", choices=["uniform", "gauss"],
+                    help="tile fusion of the network pass: 'uniform' = historical probability mean; "
+                         "'gauss' = Gaussian-weighted logit mean at stride tile/2 (seam fix; the default since 2026-10-06)")
+    ap.add_argument("--infer-scale", type=float, default=UP,
+                    help="scale the NETWORK sees; the probability map is resampled to the 1.5x "
+                         "eval frame afterwards, so the instancer and the metric are untouched. "
+                         "1.5 = the historical path (bit-identical); 1.0 = native, i.e. the scale "
+                         "the synthetic training frames are rendered at.")
+    ap.add_argument("--autoseg", default="/disk1/prusek/active-segmenter",
+                    help="AutoSeg checkout for the prior bank; used only when the checkpoint's "
+                         "stem is wider than 3 channels (a --priors run)")
     ap.add_argument("--out-json", default=None)
     ap.add_argument("--dump-pred", default=None,
                     help="write <stem>.npz with key 'prob' so the instancer can be tuned "
@@ -89,9 +184,20 @@ def main() -> None:
             out_ch = int(hw[0].shape[0]) if hw else K_ORI + 1
             if any(k.endswith("head_fg.weight") for k in state):
                 out_ch += 1
-        model = build_model(args.arch, out_ch=out_ch).to("cuda").eval()
-        model.load_state_dict(state, strict=False)
-        print(f"loaded {out_ch}-channel head", flush=True)
+        in_ch = checkpoint_in_channels(state)
+        bank = None
+        if in_ch > 3:
+            from train_v5 import PriorBank
+            bank = PriorBank("cuda", autoseg=args.autoseg)
+            if 3 + bank.n_ch != in_ch:
+                raise SystemExit(f"checkpoint stem expects {in_ch} channels but the prior bank "
+                                 f"gives 3 + {bank.n_ch}; wrong bank configuration")
+        model = build_model(args.arch, out_ch=out_ch, in_ch=in_ch).to("cuda").eval()
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f"loaded {out_ch}-channel head, {in_ch} input channels"
+              + (f"  (priors: {bank.n_ch} native-resolution channels)" if bank else "")
+              + (f"  MISSING {len(missing)} UNEXPECTED {len(unexpected)}" if (missing or unexpected) else ""),
+              flush=True)
 
     frames, names = [], []
     for p in sorted(glob.glob(os.path.join(args.data, "*.h5"))):
@@ -109,8 +215,11 @@ def main() -> None:
     cache = []
     for fr, nm in zip(frames, names):
         if model is not None:
-            ch = predict(model, zoom(norm01(np.asarray(fr["image"], float)), UP, order=1),
-                         TILE_FOR[args.arch])
+            im01 = (local_norm(np.asarray(fr["image"], float), args.norm_support)
+                    if args.norm_support > 0 else norm01(np.asarray(fr["image"], float)))
+            x = im01 if abs(args.infer_scale - 1.0) < 1e-9 else zoom(im01, args.infer_scale, order=1)
+            ch = predict(model, x, TILE_FOR[args.arch], bank=bank, fusion=args.fusion)
+            ch = resample_to_eval(ch, eval_frame_shape(im01.shape))
         else:
             ch = np.load(os.path.join(args.pred_dir,
                                       nm.replace(".h5", ".npz")))["prob"].astype(np.float32)
@@ -141,11 +250,18 @@ def main() -> None:
         rows = []
         for ch, keep, gt in cache:
             ori = ch[:K_ORI]
-            prob = ch[K_ORI] if (args.fg_head and ch.shape[0] > K_ORI) else ori.max(0)
+            if args.prob_channel >= 0:
+                prob = ch[args.prob_channel]
+            else:
+                prob = ch[K_ORI] if (args.fg_head and ch.shape[0] > K_ORI) else ori.max(0)
             mask = (prob > thr) & keep
             _, masks = instance_a(mask, KAPPA_MAX, params=params, channels=ori, prob=prob)
-            r = centerline_f1(masks, gt, tol=5.0, length_coverage=0.95,
-                              precision_coverage=0.95)
+            # The headline convention is a DECISION, not a default: the user fixed it at
+            # 0.80/0.80 on 2026-09-09 ("pod konvencí 0.8/0.8"). The strict 0.95/0.95 rule stays
+            # available and stays the secondary column, because every campaign number was read
+            # under it and the two must remain comparable.
+            r = centerline_f1(masks, gt, tol=args.tol, length_coverage=args.cov,
+                              precision_coverage=args.cov, end_tol=args.end_tol)
             r["fg"] = float(mask.mean())
             rows.append(r)
         a = aggregate_benchmark(rows)

@@ -71,6 +71,12 @@ def clip_polyline(cl: np.ndarray, shape: tuple[int, int],
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=40)
+    ap.add_argument("--seed-base", type=int, default=SEED_BASE,
+                    help="disjoint bases give disjoint frame sets; 900000 keeps "
+                         "the existing data/synth_eval reproducible")
+    ap.add_argument("--all-val", action="store_true",
+                    help="write every frame with split=val (a dedicated tuning "
+                         "set is not itself split)")
     ap.add_argument("--crop", type=int, default=768)
     ap.add_argument("--calib", default="/home/prusek/mt_enc_exp/calib_reg418_morph.json")
     ap.add_argument("--mask-hw", type=float, default=1.0)
@@ -81,14 +87,17 @@ def main() -> None:
 
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.png_dir, exist_ok=True)
-    cfg = dataclasses.replace(
-        build_cfg(json.load(open(args.calib))["best_params"], mask_hw=args.mask_hw))
+    _cal = json.load(open(args.calib))
+    cfg = dataclasses.replace(build_cfg(_cal["best_params"], mask_hw=args.mask_hw))
+    if _cal.get("gen_overrides"):                 # the same overrides train_v5.py applies
+        cfg = dataclasses.replace(cfg, **_cal["gen_overrides"])
+        print(f"gen_overrides: {_cal['gen_overrides']}", flush=True)
     bgs = sorted(glob.glob(BG_GLOB))
     c = args.crop
 
     names, counts = [], []
     for i in range(args.n):
-        rng = np.random.default_rng(SEED_BASE + i)
+        rng = np.random.default_rng(args.seed_base + i)
         bg = np.asarray(Image.open(bgs[rng.integers(len(bgs))]), float)
         while bg.ndim > 2:
             bg = bg[..., 0]
@@ -120,7 +129,8 @@ def main() -> None:
 
     # Split written in a second pass so it is a deterministic function of the whole name list.
     import h5py
-    split = assign_split(names)
+    split = ({n: "val" for n in names} if args.all_val
+             else assign_split(names))
     for name in names:
         with h5py.File(os.path.join(args.out, f"{name}.h5"), "r+") as h:
             h.attrs["split"] = split[name]

@@ -110,7 +110,8 @@ def frame_polarity(image: np.ndarray, polylines) -> str:
 
 def score(polylines, gt, shape, crossings, par_pairs, half_width=1.0) -> dict:
     masks = oracle_instance_masks(polylines, shape, half_width=half_width, up=1.0)
-    f1 = centerline_f1(masks, gt, tol=5.0, length_coverage=0.95, precision_coverage=0.95)
+    f1 = centerline_f1(masks, gt, tol=TOL, length_coverage=LCOV, precision_coverage=PCOV,
+                       end_tol=END_TOL)
     return {
         **f1,
         "n_pred": len(polylines),
@@ -119,6 +120,13 @@ def score(polylines, gt, shape, crossings, par_pairs, half_width=1.0) -> dict:
         "bundle": bundle_recovery(masks, gt, par_pairs, tol=1.5 * UP),
         "max_kappa": max_curvature(polylines, ds=KAPPA_DS),
     }
+
+
+#: Metric convention. Defaults reproduce the project's strict primary exactly; the CLI can
+#: switch them, so the ORACLE ceiling can be quoted under the 0.80/0.80 convention the field
+#: commonly reports (paradigm survey 2026-09-08 section 4: that number was never measured,
+#: and it decides whether 0.90 is reachable at all under that rule).
+TOL, LCOV, PCOV, END_TOL = 5.0, 0.95, 0.95, 0.0
 
 
 def main() -> None:
@@ -141,7 +149,15 @@ def main() -> None:
     ap.add_argument("--n-boot", type=int, default=5000,
                     help="bootstrap replicates for the CIs on mean F1")
     ap.add_argument("--seed", type=int, default=0, help="bootstrap RNG seed")
+    ap.add_argument("--cov", type=float, default=0.95,
+                    help="length AND precision coverage (0.95 = the strict primary; "
+                         "0.80 = the convention most of the field reports)")
+    ap.add_argument("--tol", type=float, default=5.0)
+    ap.add_argument("--end-tol", type=float, default=0.0,
+                    help="symmetric end tolerance in eval px (25 = the campaign variant)")
     args = ap.parse_args()
+    global TOL, LCOV, PCOV, END_TOL
+    TOL, LCOV, PCOV, END_TOL = args.tol, args.cov, args.cov, args.end_tol
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     pa = json.load(open(args.params_a)) if args.params_a else None

@@ -1457,3 +1457,658 @@ associating at native scale runs fine and merely loosens every gate by 1.5x. Thr
 
 Velocity is deliberately absent from the output and from the printed table: §18a established it
 is not measurable from this foreground, and a field in a JSON file will be used.
+
+## 23. The mask campaign: where the loss is, and the noise texture (2026-09-02 – 09-05)
+
+Nine days after §22 the question had narrowed to one number: strict F1 0.50–0.52 on the
+human-drawn roi303 VAL against 0.95 with an oracle mask. Everything below was measured on that
+block, pre-declared in `docs/TODO.md §0.0-CAMPAIGN` before any number was read, and judged by
+paired per-frame bootstrap with Holm over the whole family.
+
+### What did not move it
+
+- **The target's width and a prior bank** (2×2 factorial THIN / PRIOR_THIN / PRIOR_THICK):
+  null-to-negative in every cell. The only consistent effect in that factorial was **native-scale
+  inference**, +0.02 to +0.05 everywhere, adopted as the screen default (p = 0.23 on its own).
+- **Inference at the width-matching 1.3×**: +0.006, p = 0.67.
+- **Every decoder on the SPARSE35 map** (11 variants on 139 frames: lower thresholds, valley cut,
+  hysteresis, NMS ridges, watershed): all worse than the single 0.98 threshold, best −0.022,
+  every p < 0.001 in the negative direction. Junction identity rises as the threshold falls
+  (0.42 → 0.60) but fusion and false positives rise faster. The map has to change; the decoder
+  cannot rescue it.
+
+### Where the loss actually is
+
+- **Crossings fail on a weak arm, not on geometry.** 1 083 GT crossings: identity 22 % with the
+  model mask vs 79 % with the oracle mask; 97.6 % of failures have a disconnected mask at the
+  crossing and 62 % an arm the model never found. Shallow crossings, the hardest for the
+  instancer, are resolved most often.
+- **The operating point is per frame and unpredictable.** The optimal threshold spans
+  0.30–0.9995 across frames; an oracle per-frame threshold is worth +0.048; no image covariate
+  predicts it (|ρ| ≤ 0.24), although density, SNR, bright share, FWHM and grey-level count all
+  move the model's confidence (|ρ| ≈ 0.5–0.6).
+- **The false positives are the same event as the false negatives.** At 0.9 and 0.98 alike,
+  80–85 % of unmatched predictions are fragments or chimeras of ANNOTATED filaments; only 7–11 %
+  are off-image texture. Micro F1 barely moves with the threshold (0.487 vs 0.503).
+- **The break anatomy** (572 790 GT samples): 22.8 % of real GT samples fall under 0.98. The break
+  rate is 66 % below local SNR 0.7 and still 10.6 % above SNR 5; polarity-flipped samples break at
+  73 %, non-isolated ones at 37 %. Real and synthetic faint stretches match in width, roughness
+  and along-length statistics — the defocus and background-junk hypotheses are dead — yet the
+  model bridges the synthetic ones (97 % of label at ≥ 0.98) and not the real ones.
+
+### The benchmark itself
+
+Five frames whose image is empty or saturated but carry annotation, and 35 duplicate polylines in
+23 frames, were found by measurement and repaired under a declared rule (`repair_roi_dataset.py`);
+every arm from AUG_PHOTO on is scored on the repaired 139-frame VAL against a re-swept baseline.
+
+**What the strict metric can and cannot see (2026-09-05).** The NOISE arm was the first whose
+mechanism visibly moved on real maps — per-filament full coverage at p ≥ 0.98 rose from 27 % to
+33 % of filaments, fragments fell by 123, missed GT by 110 — and the strict F1 still came out
+null at native (−0.015, p 0.11) and negative at 1.5× (−0.030, p 0.013). Decomposing the number
+showed two properties of the benchmark, not of the model. First, the macro mean over frames gives
+23 % of its weight to 32 near-empty frames that hold 1 % of the filaments, so one or two extra
+predictions there outweigh sixty extra true positives on the dense frames (NOISE: −0.063 on the
+1–9-GT frames, +0.013 on the ≥ 80-GT frames; AUG_PHOTO has the same signature). Second, the
+annotation stops where the human stopped seeing the filament: an anatomy of every unmatched
+prediction (`diag_fp_anatomy.py`) put 13 % of the false positives on OVERSHOOT (the prediction
+covers its filament and continues past the annotation's end, median 17 px), 4 % on GAP BRIDGES
+(one filament stored as two pieces, the prediction runs through both, scored as one chimera plus
+two misses), and, on the sparse frames, two thirds of the "off-annotation" predictions on
+unannotated visible filaments and a dark band along the edge of cropped frames. The bridged
+stretches have a median contrast of 0.42 σ — the models connect pieces through evidence a human
+would not call filament. Fragments (50 %) and junction chimeras (15 %) remain the model-owned
+majority.
+
+Three consequences were declared and are applied to every arm alike: (i) secondary readings next
+to the primary verdict — macro F1 over frames with ≥ 10 GT, micro F1, and the same metric with a
+symmetric 25-px END TOLERANCE (`centerline_f1(end_tol=25)`, fixed from the baseline's overshoot
+distribution before any arm was scored under it) — none of which replaces the primary; (ii) a
+seed-to-seed resolution row (the baseline recipe re-trained with a different seed) that bounds
+what any paired difference may claim; (iii) no repair of the GT and no border rule (a darkness
+mask dropped a true positive at its smoke test; an edge-band rule would make 59 real filaments
+unreachable for +0.002) — the gap and overshoot counts go to the agreement-bias section as
+evidence of what human annotation of faint stretches does to a metric with a 95 % rule.
+
+The union-covered-but-unmatched GT (35 % of all misses) was split by `diag_covered_split.py`:
+43 % run through two or more mask components separated by 0–5 px cuts (the crossing-region cuts
+the curvature-bounded linker does not close), 24 % are chimeras, 5 % instancer cuts, 28 % the
+overshoot family. Instance-side ownership is therefore 24 % of the misses; the map side (partial
+and missed) owns 65 % — which is why the next arm after NOISE is a LOSS arm on the map
+(`--pos-weight 2`, the one segmenter knob never turned), not a sixth generator fix.
+
+**The resolution of the primary, measured (2026-09-05/06).** Three seeds of the baseline recipe
+score 0.527 / 0.486 / 0.513 on the primary at native — a span of 0.041 that lies entirely on
+the 32 near-empty frames — while the macro over frames with ≥ 10 GT (0.536 / 0.532 / 0.540) and
+micro F1 (0.494 / 0.498 / 0.497) agree to within 0.01. The baseline the campaign compared
+against is the top draw of the three (+0.018 above the seed mean). Consequences applied to the
+ledger: every single-seed arm verdict below 0.04 on the primary is "not resolvable"; the ≥ 10-GT
+macro and micro are the resolving readings; at 1.5× the seed pair spans 0.052; on the 50-frame
+combined benchmark the seed pair spans 0.07 (0.13 on the HTW block), so that set cannot rank
+arms at one seed at all.
+
+**The loss arm, and what it showed (PW2S, `--pos-weight 2`).** At its own threshold (0.70; the
+map is flat, 0.46–0.47 from 0.50 to 0.97) it met every pre-registered prediction — fragments
+1 632 → 1 056, mask breaks 589 → 274, missed + partial GT 2 514 → 1 678 — and the primary fell
+by 0.058, the dense-frame macro by 0.023, micro by 0.016, all beyond seed noise. The gain went
+to chimeras (328 → 675; a more connected map hands the instancer more junctions and it resolves
+them worse), instancer cuts (71 → 351), and the annotation-owned classes (overshoot +481,
+off-annotation +524, gap bridges +82). Map connectivity is not the binding constraint of the
+strict F1 on this benchmark.
+
+**The linker closes the crossing cuts (read-only diagnosis, 2026-09-06).** Of 1 286 mask cuts
+along the 587 "map-break" filaments (cut length 1 px at the median), the arc graph's short
+bridge joins 67 % and the free-end linker 24 %; linker-owned open cuts are 4 % (mostly a wrong
+join 13 px away). 485 of 587 filaments have every cut joined and still fail, as chimeras (38 %
+of the pool) or on precision and the one-to-one assignment. The instance-side loss is junction
+identity under weak arms — the map's confidence at crossings — not linking; the linker's
+parameters are not levers.
+
+**The texture lever, replicated and bounded.** A second seed of NOISE reproduced the mechanism
+(coverage 0.324 vs 0.325, fragments 1 494 vs 1 509, missed 1 001 vs 1 050) and the cost
+(16-bit frames +37 TP against +92 FP); seed means on the resolving readings put the texture
+recipe +0.008 above the baseline recipe on the dense-frame macro and on micro, inside the seed
+spread. Tripling the dose (NOISE2) reproduced the effect without deepening it (break share below
+0.98: 0.228 → 0.211 → 0.196; fragments unchanged) — the lever saturates at NOISE's dose.
+
+### The noise texture, and the arm it earned
+
+Two hypotheses were killed by their own pre-declared checks before costing GPU hours: a
+label-visibility gate (the model FINDS the "invisible" synthetic label at p 0.999 — a straight
+faint line is trivially integrated) and the generator's invisible-frame mode as a cause (it is
+the noise normalisation on dirty background crops, but nothing the model fails on).
+
+The one covariate on which real and synthetic faint stretches differ is the **noise itself**:
+the real 16-bit frames' off-filament residual is spatially correlated (lag-1 ACF median 0.19,
+p90 0.62) and heavy-tailed (kurtosis median 4), every synthetic frame is white and Gaussian. The
+decisive check injected that texture into synthetic renders at inference: label recall at
+MATCHED local SNR 1–1.5 fell from 0.90 to 0.56 (real 0.73) and at 1.5–2 from 0.94 to 0.75 (real
+0.81), while white noise of the same amplitude changed nothing. **A line integrator trained on
+white noise is blind to faint filaments in correlated texture.** The NOISE arm rewrites the
+generator's noise model (photon-count reference, a per-frame correlated share at constant
+variance, sparse impulses), calibrated with the same instruments against the real band and a
+criterion that could fail; its predictions (recall at SNR 1–2 rises, the threshold spread narrows,
+the injection check on its checkpoint shows corr ≈ white) are on record before it trains.
+
+Read (2026-09-05): the recall and break-rate predictions were met (break share below 0.98
+0.228 → 0.211 in every SNR bin; injection recall at SNR 1–2 0.556 → 0.616), the spread did not
+narrow, and the strict F1 did not follow — see "The benchmark itself" above for why. The cost
+was concentrated on the 16-bit (textured) frames: +141 false positives against +24 true positives
+there, on stretches the annotation does not contain; on the coarse-quantised frames the arm was a
+clean +48 / −10. NOISE is closed; a pre-registered dose escalation (NOISE2, correlated share
+0.8–0.98, crop ACF 0.43 vs 0.13) runs with a falsifier: it fails if its textured-frame FP rise
+again exceeds its TP rise.
+
+### Two bugs caught before they cost a night
+
+The evaluation chain's bash function expanded `"$@"` to its own arguments, which would have
+killed every overnight sweep on stray positionals; and the first median-reference noise draft
+subtracted `median − span/2` and clipped at zero before the Poisson draw, putting a floor inside
+the dark-filament dip range for 40 % of frames — visible only as a lower filament-SNR median in
+the calibration screen. Both were found in review, not by a failed run.
+
+### Scale augmentation: robustness, not gain (2026-09-06 – 09-07)
+
+The SCALE arm (render-and-polyline rescale 0.8–1.5 with probability 0.7, nnU-Net low-resolution
+simulation on the image with probability 0.2, target rasterised after the rescale) was
+pre-registered with one mechanism target: the gap between native and 1.5× inference must close.
+It did, on two seeds and two checkpoints each, on every reading: the baseline's three seeds lose
+0.052 micro and 0.036 dense-frame macro when the image is upscaled, SCALE loses 0.003 / 0.010 and
+its replicate 0.006 / 0.0005 (pick) and 0.001 / 0.005 (ep40). At native the arm is null on the
+dense-frame macro and micro for both seeds (within the seed spans of 0.008 and 0.004), while the
+second seed's ep40 checkpoint is worse at native beyond the seed spans on every reading (own
+threshold 0.80 once the grid was extended to 0.70: dense-frame macro −0.016, micro −0.023, and
+a 1–9-GT macro that never exceeds 0.25 at any threshold against the baseline's 0.42–0.50). The
+first read had that row at the fast grid's floor; the advisor's rule — an own threshold at a
+grid edge is not a read — sent it back for a lower grid, which confirmed the loss as a property
+of the checkpoint. So the claim is stated with its count: the gap closes on all four
+checkpoint-rows, and native cost is null on three of them. The first read framed SCALE's +0.03 / +0.05 at 1.5× as "the campaign's one positive
+reading beyond the seed span"; the advisor pointed out that one exceedance among ~32 such reads
+against an n = 3 span is what chance delivers, and that the pre-registered target tells the
+cleaner story: **scale augmentation makes the model scale-robust, it does not make it better.**
+That is the claim the paper carries, with the sparse-frame caveat.
+
+### The heat-ridge decoder: a lead closed by its own rule (2026-09-06)
+
+The HEAT arm's Gaussian centerline head lost F1 like every other arm, but decoding its ridge
+instead of thresholding the existence map raised junction identity from 0.41 to 0.53–0.55 on the
+same instancer. Two pre-declared screens on that dump (spur pruning, an existence gate, and the
+heat threshold) showed the trade is monotone in the heat threshold: t = 0.8 / 0.7 / 0.6 / 0.5
+gives identity 0.41 / 0.52 / 0.54 / 0.55 and micro 0.474 / 0.468 / 0.445 / 0.430 against the
+threshold decoder's 0.41 / 0.488, with 200–1 200 extra false positives. The pruning length and
+the existence gate move under 1 % of ridge pixels, and even that gate costs 0.011 identity,
+because the pixels it drops are the weak arm through the crossing. The identity gain and the
+spurs are the same pixels. No variant reached the pre-declared bar (identity ≥ 0.50 with micro
+not below the baseline by more than 0.01), so the lead is closed; it survives as the decoder-side
+face of the crossing finding of §23 (the loss at a crossing is the confidence of its weak arm).
+
+### The decode threshold is the crossing lever, not the loss (2026-09-07)
+
+The campaign chose its operating point by maximising the strict macro F1, which put it at 0.99.
+Sweeping only that threshold on one cached map shows what the choice costs: at 0.97 the macro
+falls by 0.003 while junction identity rises from 0.332 to 0.425, bundle recovery from 0.341 to
+0.377, micro F1 from 0.494 to 0.508 and the dense-frame macro from 0.536 to 0.547. Fragmentation
+is flat across the whole range (1.057-1.084), so the identity is not bought by cutting instances.
+The deployed threshold is optimal on the all-frame macro alone -- the reading whose 23 % weight
+sits on 32 near-empty frames holding 1 % of the filaments -- and is beaten at 0.97 on every other
+reading at once.
+
+Against that, the training-side intervention aimed at the same target is small. Arm 32 put a
+weight of 6 on the BCE within 14 px of every crossing (the research note's first recommendation,
+with the radius derived from this project's own measurement that the failing arm sits 8-20 eval
+px away rather than the note's 6 px). At matched thresholds it buys +0.014 of junction identity,
+against +0.093 for the threshold step, and its F1 is null within the seed span. The gain does
+survive the matched-threshold check, so it is real and attributable -- it is simply seven times
+smaller than moving the operating point. Both results say the same thing in the language of
+§23's crossing finding: the loss at a crossing is the confidence of its weak arm, and a region
+weight did not make that arm confident enough to clear a high threshold, whereas a lower
+threshold accepts it. Crossing metrics should therefore be reported at an identity-chosen
+operating point, stated as its own column beside the F1-chosen one.
+
+
+### Two crossing problems, and the one the arc graph owns (2026-09-08)
+
+The campaign closed at 33 arms with nothing positive on the strict primary, so the question moved
+from "which recipe" to "which mechanism". Two measurements settled it.
+
+**In domain and on real, crossings fail for different reasons.** On real data the arm is usually
+not in the map at all (51-62 % of failures) — an evidence problem. In domain that nearly vanishes
+(5.4 %) and the mask instead runs straight through the crossing while identity is still lost. The
+campaign had been treating these as one thing.
+
+**Inside the in-domain half, the discriminator is the ARITY of the arc-graph junction, not its
+presence.** Classifying every GT crossing against the graph the instancer itself walks (n = 454,
+identity 0.6586, params `src/instance/params_a.json`):
+
+| class | n | identity | with an oracle mask |
+|---|---|---|---|
+| broken (mask breaks the filament) | 79 | 0.228 | 0.544 |
+| node (a junction cluster within 8 px) | 214 | 0.738 | 0.710 |
+| fused (no junction) | 161 | 0.764 | 0.764 |
+
+Whether the graph has a junction there carries **no information**. Within `node`, arity carries
+almost all of it: 4 arms → 0.944 (n = 107), 3 arms → 0.333 (n = 33), and the gap holds inside
+every angle band, so it is not a proxy for crossing angle. **Given a well-formed X,
+`match_junction` resolves it 94 times in 100; the pairing cost is not the bottleneck.**
+
+A 3-arm junction is the crossing represented as **two** junction clusters joined by a shared arc
+of 25-120 px. Each 3-way junction can match only one pair, so one filament is always left open.
+`_absorb_crossing_bridges` refuses to merge them for a documented reason — past `bridge_max_len`
+such an arc could be a real segment — and its docstring calls that an irreducible trade-off. It
+is irreducible from geometry alone. A predicted multiplicity map is evidence that decides it, and
+`instance_a(..., overlap=...)` now consumes it: the outer arms of the two junctions are matched
+across the shared arc in one `match_junction` at the arc's true length, and each pair gets its own
+traversal. `overlap=None` is bit-identical, asserted by two tests.
+
+This is bottleneck #1 (close parallels) appearing inside the crossing statistics: two filaments
+within 3 px for tens of pixels, merged into one ridge the graph can traverse once.
+
+**The other 39 % of failures are a broken mask, and the break is shallow** — 84 % keep their
+weaker arm above 0.9 — so a plain threshold drop fills the same holes. Any overlap-conditioned
+fill must be read against a threshold drop **matched on added foreground**.
+
+### Two parameter traps that voided a read (2026-09-08)
+
+Both cost a full measurement and both are silent, so they are recorded rather than fixed once.
+
+1. **`--params` overrides, it does not select.** `instance_a` merges
+   `{**default_params(), **params}` and `default_params()` already loads
+   `src/instance/params_a.json`, the vector behind every published instancer number. Passing a
+   tuned probe vector on the command line halved in-domain junction identity (0.630 → 0.311)
+   while the mask stayed bit-identical. Only a pre-declared self-check caught it.
+   `scripts/diag_crossing_map.py` now prints a WARNING naming every overridden key.
+2. **The outer tree has no `params_a.json`.** `/home/prusek/mt_enc_exp/mt34_work` lacks the file,
+   so `default_params()` there silently returns the hard-coded DEFAULTS. Any instancer script run
+   from that tree without `--params` uses a different assembler than every published number.
+
+## 24. One instrument, six nulls, and the gap that is not the model's (2026-09-15 – 09-18)
+
+The user's directive on 2026-09-15 was to stop and fix the instrument before touching the model
+again: one metric, one test set, then read the best model and improve it. What follows is what
+that produced, in the order it happened.
+
+### The declared instrument
+
+Centerline-F1 at tolerance 5 px on the 1.5× frame, coverage and precision 0.80, **pooled micro**
+as the primary with the ≥ 10-GT macro alongside; instancer constants derived, not tuned
+(`params_a_derived.json`, min_length 15, κ_max 0.25); checkpoint ep040 by rule; the threshold
+chosen per model on the block's own VAL; native inference. Test set: roi303 TEST (137 frames)
+primary, htw TEST (33) secondary, each scored once. SPARSE35 ep040 is the model: 0.641 ± 0.006
+and 0.601 ± 0.012, against oracle-mask ceilings of 0.935 and 0.871.
+
+### Where the 0.27 on roi303 VAL goes
+
+Paint-and-keep ceilings (`diag_ceiling_union.py`: the GT band painted into the model's own map,
+the rest kept, optionally everything far from the band deleted) split the gap into named terms.
+The first reading was wrong by construction — a 2-px band painted 1–3 px beside the model's
+ridge makes a double track the assembler breaks on — and was retracted once the band was widened
+to the annotation offset. Read at matched band width and taken as an upper bound: evidence-free
+stretches drawn through image that carries no ridge ≈ 0.07 (not polyline drift: the weak share
+does not fall when the window is widened to the metric's tolerance), unannotated filaments
+≈ 0.05, crossing erosion ≤ 0.03, field-stop edge ≈ 0.02, near-filament merging 0.01–0.02,
+particles ≈ 0.02. **Model-owned ≈ 0.06–0.07; the single-frame bound as annotated is 0.74–0.76.**
+
+### The six arms
+
+Every arm was declared with a falsifier and a mechanism gate before launch and read with
+`read_arm.py` (paired roi303 VAL micro at per-model thresholds, Wilcoxon, precision at matched
+recall, htw-only, anatomy at the own threshold).
+
+| arm | change | roi303 VAL micro Δ | mechanism gate | verdict |
+|---|---|---|---|---|
+| 50 | field stop rendered (`--fov-prob 0.5`) | −0.004, p 0.047 | edge share of off-annotation length unchanged (0.130 → 0.113) | negative |
+| 51 | amodal K-channel head | −0.088 (htw −0.16) | over-fires off annotation | negative |
+| 52 | anti-aliased stamp (+2.6 % contrast) | +0.0105, p 0.45 | anisotropy unchanged | null |
+| 53 | Euclidean target band | +0.0005 (htw −0.045) | brittle to resampling | null |
+| 54 | rotation augmentation | +0.0014 | ±45° penalty unchanged | null |
+| 55 | pos_weight 2 / 4 | −0.005 / +0.0035 | fragments +15 % / unchanged | null / null |
+
+Arms 52–54 were aimed at a real finding: the model is grid-anisotropic on real frames (a
+rotation probe puts oblique filaments rotated onto the axes at 2.5–2.8× the weak share) and the
+renderer's stamp aliases by 1.4× in peak between angles. Three isotropy fixes moved neither the
+anisotropy nor the score, so the finding stands and the lever does not. Arm 55 is discussed below.
+A 14-agent research round in parallel (IRM physics, sim-to-real, annotator convention,
+diagnostics, data side; adversarial verifiers) refuted 12 of 13 proposals; the survivor was the
+aliasing, killed by its own gate in arm 52. Temporal input is dead on this benchmark: sibling
+frames are not co-registered, and the kill line was missed by 2.5×.
+
+### What the round taught about the instrument
+
+- **A paint-and-keep ceiling needs matched band width.** A band narrower than the annotation
+  offset creates a second ridge and scores the assembler, not the defect.
+- **The mechanism gate is read before the headline.** Every headline gain of the round was
+  inside seed noise (±0.010 micro, two seeds 0.04 apart on the strict macro); the only reading
+  that ever discriminated was the anatomy at the own threshold.
+- **Matched recall means the best-precision node with recall ≥ baseline − 0.005**, not the node
+  nearest in recall; the first rule picked a low-precision node by 0.001 and flipped a sign.
+- **The trainer's 16-frame VAL trace misjudges heads.** It had the amodal head ahead (0.569 vs
+  0.485) on alice/586-heavy frames; on roi303 and htw the head loses 0.09–0.16. Gains on the
+  6- and 11-frame sources recur in every arm and are inside seed spread (SEED2 alone moved 586
+  by +0.035); they are not evidence.
+- **Check the ledger, not the summary, before calling a knob untried.** Arm 55's pw 2 had been
+  trained and read twelve days earlier under the old metric (−0.058; at its own threshold 0.70 a
+  more connected map whose gain is absorbed by chimeras and instancer cuts); the declaration was
+  written from a stale memory line, and the launcher re-trained into the existing run directory
+  and overwrote the 2026-09-05 checkpoints. Same seed, so a replicate rather than a loss, but the
+  rule is now: grep the TODO ledger by run name, and `ls runs/<NAME>` before any launch.
+- **A shared-threshold statistic can invert.** The August cc/gt hint fell with the weight
+  because the under-confident map carries fewer low-confidence blobs at a shared threshold, not
+  because filaments break less; at its own threshold a thinner mask breaks more.
+
+### The benchmark owns the rest
+
+roi303's VAL and TEST share fields: roi_img_208 (VAL) is byte-identical to roi_img_209 (TEST),
+172 = 173 inside TEST, 206 = 207 inside VAL; 163 of 277 frames have a sibling at correlation
+≥ 0.99 and 94 sibling pairs straddle the split. No published TEST number until the split is
+redone by field. With the model-owned share at 0.06–0.07 and every mechanism-backed lever null,
+the next work is the benchmark — re-split by field, an annotation-completion pass on ~10 VAL
+frames, and a declared convention for evidence-free stretches — and those are decisions for the
+user, not arms.
+
+## 25. Four rulings, a leaking split, and a ceiling the instancer owns (2026-10-05)
+
+The user ruled "do 1, 2, 3, 4" on the 2026-10-04 research round and then authorised generator
+changes and retraining (goal: the most realistic and most variable synthetic frames; widen, add
+content, fix defects, fit nothing). Everything below was declared in `docs/TODO.md` before it
+was read, except where marked exploratory.
+
+### The roi303 split leaked far more than recorded; v2 is split by field (B2)
+
+Field groups = connected components of high-pass image correlation ≥ 0.20 (the low-pass
+correlation used on 2026-10-04 measured illumination, not the field). The v1 split had ~6 large
+groups (18–40 frames, time-lapse stacks) and ~65 singletons; about 100 of 137 TEST frames shared
+a field with a VAL frame. roi303 v2 (`docs/roi303_split_v2.json`, chosen blind, no score per
+option): 273 frames, VAL 145 / 7 386 curves, TEST 128 / 6 506. v2 TEST is unread. Intervals from
+the stored v1 rows under a field-cluster bootstrap: roi303 TEST 0.641 ± 0.040, htw TEST
+0.601 ± 0.054 — the seed-to-seed difference of one recipe is as large as the "leads" of arms 50–55.
+
+### RELINK 1-D failed its own guards
+
+One multiplier m on `w_theta`, derived on fresh synth (96 frames, 3 seeds). Pooled synth F1 rises
+0.637 (m = 1) → 0.665 (1.75) → 0.669 (2.25), by recall only, while junction identity falls
+monotonically with m. The rule picked m* = 1.75; identity −4.8 % and bundle −3.8 % against a
+−2 % limit → FAILED, real VAL not read, `params_a_derived.json` unchanged. Declaration flaw: the
+rule selected by F1 and checked guards afterwards with no fallback; m = 1.25 passes (+0.017) but
+taking it now would be a rule written after the read.
+
+### The blocks fail on different axes, and in domain the instancer is the ceiling
+
+Per-curve logistic regression of a miss: roi303 is SNR-driven (β −0.56; 30 % of curves have
+SNR < 2 and miss at 0.42), htw is length-driven (β −1.22; < 12 px miss 0.88; width carries no
+signal once length is in). Exploratory (no criterion): a perfect band from exact GT scores only
+0.686 on the model's own distribution and the model reaches 0.636–0.646 there (93 %); on real it
+reaches 70 % (roi303) and 72 % (htw) of the ceiling. The sim-to-real loss is in the mask; the
+synthetic scenes are harder for the instancer than the real ones.
+
+### Old arms re-read at ep040: correlated noise is a trade between the blocks
+
+Paired vs SPARSE35 on v1 VAL. NOISE / NOISE_S2: htw +0.028 / +0.023 (recall 0.568 → 0.658 /
+0.638, the 12–60 px curves), roi303 −0.018 on both seeds (precision; cluster CI excludes 0).
+COMBO: +0.025 / −0.012. SCALE fails the width gate (miss of < 20 px htw curves 0.698 → 0.662 /
+0.708) — "htw short filaments are out of scale support" is dead. AUG_PHOTO null on roi303,
+−0.030 on htw. JWEIGHT negative. SPARSE20 / SPARSE50 / TIRF35 confirm the 35 % sparse choice.
+
+### Tile fusion loses ~0.012 on roi303
+
+Gaussian-weighted tiling (stride 256, declared decode) is +0.0117 [+0.006, +0.020] on roi303 VAL
+(p 0.012), precision at equal recall (FP 3 304 → 3 058); a tile-free pass gives the same number,
+so the loss sits at the seams of the uniform-mean / stride-387 fusion. htw frames fit one tile
+(bit-identical). One seed, v1 VAL only. Mechanism read (139 multi-tile frames): within 8 eval px
+of an interior tile edge 30.6 % of annotated-filament points fall below the cut under the declared
+fusion, against 16–19 % elsewhere; Gaussian weighting brings the seam bin to 16.4 %, flat across
+bins. Off-annotation foreground near seams is LOWER under the declared fusion (an addendum
+criterion that expected the opposite was not met): the seam suppresses everything, so the
+precision gain is not fewer stray pixels — fragments of curves cut at seams are the consistent
+but unmeasured explanation. The comparison is at a shared cut, which is valid here only because
+the two maps coincide away from seams (64+ px bin: foreground 0.00809 / 0.00812, weak share
+0.190 / 0.188). Whether this is
+a defect fix (nnU-Net's own default) or an inference trick is the user's ruling; neither the
+declared path nor the hub was changed.
+
+### ARM 56 NMIX / ARM 57 NMIXFLAT (launched 19:38; read 2026-10-06, see below)
+
+Generator additions, both off by default and bit-identical when off
+(`tests/test_noise_mix_flat_bg.py`): a per-frame choice between two noise regimes
+(`noise_alt_prob`, `noise_alt`) and a flat-fielded background (`bg_flatten_prob`, sigma
+log-uniform 3–60 px — content the generator never rendered: htw low-pass background std
+0.007–0.05 vs synthetic ≥ 0.07). Hypothesis: a mixture keeps the htw gain of NOISE without the
+roi303 cost. Two seeds each, earning rule, mechanism gate and synth guard in the TODO block of
+19:50. Said before the read: htw noise amplitude (nMAD 0.11–0.28) is still only partly covered
+(synthetic p99 0.156).
+
+### The mixture earns, the flat background does not, RELINK fails its confirmation (read 2026-10-06 04:40)
+
+Four reads, each against a line written before the dump existed (TODO 19:50 and 22:15).
+
+- **ARM 56 NMIX earns.** A per-frame 50/50 choice between the shipped noise and the correlated
+  regime: htw VAL +0.024 / +0.072 against the same-seed baseline (0.626 -> 0.651, 0.588 -> 0.660),
+  roi303 VAL +0.010 / +0.010 (0.656 -> 0.666, 0.658 -> 0.667). Replacing the noise had cost roi303
+  −0.018 on both seeds; mixing it costs nothing. The roi303 line was non-inferiority and the
+  field-cluster intervals include 0, so the claim is "the cost is gone", not "a gain". Mechanism
+  gate (htw miss of 12–35 px curves −11.5 % / −31.6 %, line −10 %) passes narrowly on the first
+  seed; synth guard passes. Seed-free reading: all four mixture runs sit above all three
+  SPARSE35-recipe seeds on htw, and both NMIX runs above all three on roi303.
+- **ARM 57 NMIXFLAT is null against ARM 56** (htw +0.005 mean over NMIX, line +0.012). Rendering
+  flat-fielded backgrounds — content the generator never produced — adds nothing on top.
+- **RELINK with the repaired rule does not earn.** The rule now selects among multipliers that pass
+  the identity and bundle guards. The fresh set picks 1.75, the old set 1.25; the rule takes the
+  smaller. At 1.25: roi303 +0.0072 (line +0.006, met), htw +0.0081 (line +0.012, NOT met); same
+  sign on all seeds, junction identity −0.2 %. The one confirmation read is spent; the lane is
+  closed. What it taught: the two synthetic sets disagree on where identity breaks (1.5 vs 2.0),
+  so "the largest safe multiplier" is not a constant one can derive from 96 frames.
+- **The fusion fix replicates on three seeds** (+0.012 / +0.013 / +0.015 on roi303 VAL, every
+  cluster interval excludes 0; `--fusion uniform` reproduces the cached dump exactly). `eval_v5.py`
+  now defaults to Gaussian fusion; the declared instrument is "ep040, native, gauss fusion".
+  `train_v5.predict` keeps `uniform` as its function default so old callers reproduce.
+
+Lesson worth keeping: the noise regime was never the wrong content — it was the wrong
+*replacement*. A generator arm that swaps one prior for another tests "which is closer to this
+block"; a mixture tests "does the model need both", which is the question domain randomization
+actually asks. Three earlier noise arms answered the first question and were read as a trade.
+
+### LPC screened in a morning: a ceiling that exists, and three premises that do not hold (2026-10-06)
+
+The user said go on screens S0–S2 of the Lifted Path Cover proposal. Each had a line written before
+its code (`docs/TODO.md` 07:55, 08:25, 09:05).
+
+- **S0, candidate ceiling — passed.** With the mask unchanged, an oracle choosing among the instancer's
+  own arcs and curvature-admissible links scores 0.838 on a perfect band and 0.831 on htw VAL (instancer
+  0.646 / 0.608). Two things it also showed: a *looser* cut makes the candidate set worse at every bridge
+  length (neighbours merge into arcs no selector can split), so the "permissive skeleton" was wrong; and
+  the bridge length chosen was the grid edge.
+- **S1, strip vs pixel — passed its line, emptied its premise.** A CNN on rectified strips beats the
+  mean map logit along the bridge (+0.053 AUC in domain, +0.035 on htw VAL on 91 true links). A logistic
+  regression on five hand features equals it in AUC (it trails in average precision in domain, 0.79 vs
+  0.89), and a map-only strip equals the full strip everywhere: the raw image contributes nothing to
+  the presence decision.
+- **S2, junction identity — void.** At junctions where two GT curves each own two facing arms, the
+  instancer's matching is already right 92 % of the time in domain and 99.7 % on roi303 v2, so a +0.10
+  line could not fire; the CNN reads 0.917. The useful part is what the unit excluded: only 218 of 749
+  GT crossings form such a junction. The "connected mask, identity 0.50" failures are crossings where
+  the arc graph itself is wrong (arity after contraction, shared arcs, unowned arms) — upstream of
+  pairing.
+- **Exploratory decomposition (not declared):** without the privilege of deleting unowned arcs the
+  oracle keeps 0.780 in domain but drops to 0.710–0.727 on htw. In domain the +0.17 is link choice in
+  the 12–36 px range between arbitrary arc ends; on htw about half of the ceiling is the annotation
+  convention.
+
+What it cost: one morning, ~20 GPU-minutes, no trunk retraining. What it bought: the proposal's three
+mechanisms (raw-image cue, learned verifier over hand features, link-identity head) are each measured
+and none carries; the surviving quantity is an instancer-side selection gap in domain. A design that
+had gone straight to S3 would have spent days to find the same thing less clearly.
+
+### The decoder gains after all — a link score fitted on synthetic links (2026-10-06, afternoon)
+
+The user asked for the two instancer-side forks left by the screens. The crossing diagnostic on 701
+synthetic crossings said most failures are arcs no curve owns (56 % on the model map) and predicted
+that a link-level decoder had "almost nothing to win at crossings". That prediction was wrong, and the
+oracle it rested on was not an upper bound: it chose among links the old bridging rule admitted.
+
+Instancer L keeps the arc graph and replaces the greedy bridge by one assignment: every pair of ends of
+different arcs within 60 px whose implied curvature is ≤ 0.25, scored by a logistic on five hand
+features (mean and min map logit along the bridge, gap, turn, the old pair cost) fitted on synthetic
+links only, solved as a max-weight matching. Selected on synthetic scenes (0.637 → 0.708), then read:
+
+| block (VAL) | A → L, own cuts | interval |
+|---|---|---|
+| roi303 v2, three baseline seeds | 0.676 → 0.718 / 0.677 → 0.714 / 0.676 → 0.706 | all exclude 0 |
+| htw, three baseline seeds | 0.626 → 0.639 / 0.588 → 0.628 / 0.598 → 0.650 | first includes 0 |
+| htw, noise-mixture models | 0.651 → 0.698 / 0.660 → 0.693 | both exclude 0 |
+
+htw is the decisive block (its annotation is clean), and there the deployed seed gains least, +0.013
+with an interval that includes zero; roi303's larger gain is secondary until the annotation is completed.
+Junction identity on roi303 rose 19 % relative. On htw the mixture and the decoder stack (+0.07 / +0.10
+over today's model); on roi303 the mixture adds nothing under either decoder. What did not work stays
+on record: the strip CNN, the raw image and the junction head. What worked is the least novel piece —
+a global assignment instead of a greedy one, with weights learned where labels are exact.
+
+The same afternoon the baseline was read once on the field-disjoint roi303 v2 TEST: 0.640 / 0.637 /
+0.633 (VAL 0.676). Seeds agree to 0.003; fields do not (95 % interval about ±0.08).
+
+### The network version of the link score loses to five hand features (2026-10-06, evening)
+
+The user chose to build the network variant before the test read. The strip CNN from the morning's
+screen was retrained as the link scorer (same strips, map only, two seeds), a rule was written first
+(htw VAL decides; the simpler model keeps ties), and both scorers were run on identical arcs and
+candidate links.
+
+| | L-hand | L-strip |
+|---|---|---|
+| link AP in domain | 0.79 | 0.89 |
+| F1 in domain (`synth_relink96b`) | 0.676 | 0.668 |
+| htw VAL, strip − hand | — | −0.007 … +0.007, all include 0 |
+| roi303 v2 VAL, strip − hand | — | −0.027 … −0.033, all exclude 0 |
+
+A better ranking of single links did not become a better assembly, even in domain: the matching needs
+the score to be right about *which of two competing links* wins at one arc end, and average precision
+over all links does not measure that. L-hand is the instancer.
+
+The noise mixture's third seed gained +0.063 on htw and read −0.007 on roi303 v2 VAL against a
+−0.006 line, so by the rule written in the morning the recipe stays SPARSE35. Two operational notes:
+58 of 72 jobs of the first launch died of GPU memory and were logged as `rc=0` (the log line took the
+exit code of `date`); completion is checked by counting outputs.
+
+### The held-out 2×2, read once (2026-10-06, 17:45)
+
+With the instancer (L-hand) and the recipe (SPARSE35) fixed on VAL, the four cells were evaluated once
+on the field-disjoint roi303 v2 TEST and on htw TEST, each at its own VAL cut, three seeds each.
+
+| 3-seed mean | roi303 v2 TEST | htw TEST |
+|---|---|---|
+| SPARSE35 + A (deployed) | 0.637 | 0.601 |
+| SPARSE35 + L | 0.674 | 0.629 |
+| noise mixture + A | 0.651 | 0.638 |
+| noise mixture + L | 0.687 | 0.668 |
+
+The decoder's gain held out of sample at the size seen on VAL (+0.038 on roi303, interval excludes
+zero; +0.028 on htw, interval touches zero). The mixture, which had missed its VAL rule by 0.001,
+read positive on both TEST blocks (+0.014, +0.037). Its row is a report, not a selection: the rule was
+written to be decided on VAL, and choosing the recipe on TEST would turn the test set into a selection
+set — that decision was handed to the user as such. Junction identity on TEST exists for one seed
+only (0.493 → 0.514), far below the +19 % seen on VAL.
+
+
+## 26. The "ultimate model" round: one free lever survives, once the line is scaled to its cost (2026-10-28/29)
+
+The validated parts (noise mixture, instancer L-hand, Gaussian tile fusion) were already one
+configuration, so the round could only add new levers on top of it. Two were declared in `docs/TODO.md`
+before launch, each against same-recipe controls, and trained on kajman because tulen was occupied.
+
+**The training host matters as much as a seed.** The same recipe and seed trained on kajman and on tulen
+differ by +0.007 on roi303 v2 VAL and −0.016 on htw VAL, outside the ±0.006 host rule. Decoding is not
+the cause (kajman decodes tulen checkpoints within 0.0012). From here on every control is trained on the
+same machine as the arm it controls (NMIX_K, NMIX_K2, NMIX_K3).
+
+**ARM 59, output-space alignment to unlabeled SpheroSeg frames (AdaptSegNet, λ 0.001, 188 IRM frames
+selected by rule and leak-checked against every VAL and TEST block): a clean null.** Pooled +0.001 on both
+blocks, no over-firing, and the bottleneck probe did not move beyond its own run-to-run spread
+(0.81–0.93 across controls of one recipe). Synthetic and real output maps already had the same density,
+so an output discriminator had nothing to align; the gap lives in the encoder.
+
+**ARM 58, anti-aliased rendering (`paint_aa`) on the noise-mixture recipe: does not earn.** roi303 v2 VAL
+null (pooled −0.0004), and its declared mechanism, shorter end overshoot, failed the other way. htw VAL
+rose in all four comparisons (pooled +0.030), and a post-hoc decomposition put the gain in recall of GT
+curves shorter than 20 native px. That pointed at a plausible cause (the old renderer drew each filament
+about 3.3 px short of its label), but the hypothesis was formed after looking, so it got its own
+confirmation arm.
+
+**ARM 58b, a third seed with the line written before any output existed: not confirmed.** On seed 3 alone,
+htw +0.0072 [−0.019, +0.033] against a line of +0.024; roi303 +0.0009, synth +0.0044; the short-curve gate
+read +0.042 against +0.05. The sign stayed positive in all five comparisons, but the seed that took no
+part in choosing the hypothesis read 0.3 of the line, with an interval that still covers it. A one-seed
+test at this noise level has about even odds of passing even when the effect sits exactly at the line, so
+it cannot tell selection from a small real htw gain of about +0.02. By the declared rule `paint_aa` is not
+adopted and stays off; settling the htw question would take at least three more same-host seed pairs.
+
+Under the lines declared that night no arm earned, so TEST was not read then, and the final model stayed the
+noise mixture with instancer L-hand as read on 2026-10-06 (superseded the next day by ARM 58c, below) (roi303 v2 TEST 0.687, htw TEST 0.668, with the disclosure that the mixture missed its
+VAL rule by 0.001 and was adopted after that read). Cost: eight trainings (about 2.7 h each at 4 min/epoch)
+plus dumps on 2× L40S, roughly 25 GPU-hours over 12 h of wall time (an estimate from the logs).
+
+**ARM 58c, the same lever under a complexity-scaled line (2026-10-29): adopted.** The user's criterion is that
+one point of F1 is a good gain when the model does not grow, and the renderer fix adds no parameters and no
+inference cost. A new rule, written before seeds 4–6 existed, asked for htw ≥ +0.010 pooled over the four
+pairs trained after the hypothesis (seeds 3–6), with no regression on roi303 or synth. It read htw +0.014
+[+0.001, +0.028], roi303 +0.007, synth −0.0004; the htw sign was positive in all six pairs, and so was the
+short-curve recall. The single TEST read for these twelve models (the second adaptive use of TEST) repeated
+the htw gain at the same size, +0.014 [−0.001, +0.028], and found roi303 null (−0.001). The recipe is now the
+noise mixture with `paint_aa`, instancer L-hand: TEST 0.693 on roi303 v2 and 0.681 on htw (mean of four fresh
+seeds, kajman), against 0.695 and 0.667 for the same-host noise mixture. The lesson about lines: a line set
+at the noise of one seed demands a large effect; a small free gain is found by averaging seeds, not by
+waiting for one seed to be lucky.
+
+**Run-level caveat on ARM 58c (added 2026-10-31).** The intervals above resample test frames only; they do not see
+the variance between training runs, and the trainer is not deterministic, so the same seed fixes the synthetic data
+stream but not the trajectory. Tested at the level of runs, the htw gain is +0.014 on VAL (four fresh runs per arm,
+Welch p 0.13) and +0.012 on TEST (six per arm, p 0.14, five of six seeds positive). Its sign holds on two disjoint frame
+sets and the short-curve recall moved in all six pairs, but six runs do not resolve it. The adoption stands on zero added
+complexity, no roi303 regression and that consistency, and is reported that way.
+
+**Morning of 2026-10-31: five checks without training.** Averaging the probability maps of six seeds gains roi303 v2
+VAL +0.033 and htw +0.010 (two seeds already +0.017 as the mean of the two blocks, at twice the inference cost); weight
+averaging over epochs 28–40 (SWA) gains nothing. Distilling the ensemble was ruled out before any training: on synthetic
+frames the ensemble equals a single model (+0.002), and the seeds disagree 3.3 times more on real frames than on
+synthetic ones, so a student taught on synthetic inputs, the only ones allowed, would learn the label again. A denser
+generator (DENSE) re-read under the current metric costs htw −0.058. An audit of the renderer against the label
+refuted the story that the old renderer drew filaments short; why `paint_aa` helps on htw remains unexplained.
+
+**ARM 59b, adversarial alignment of the encoder (2026-10-31): null.** A gradient-reversal discriminator on the
+nnU-Net bottleneck (DANN, λ 1.0, 188 unlabeled SpheroSeg IRM frames, four seeds against same-host same-seed controls)
+held its discriminator at chance for all forty epochs, yet a linear probe still told synthetic from real features
+(AUC 0.74–0.82 against 0.81–0.91 for the controls). It read htw +0.012, roi303 +0.001, a block mean of +0.0065 against a
++0.010 line. With the output-space arm of 10-28, label-free alignment to unlabeled real frames is closed on both branches.
+
+**ARM 60, MT-like lines in the empty backgrounds ignored in the loss (2026-10-31): null.** About a quarter of the
+backgrounds carry faint scratches and fibres that the model itself fires on (7 % of their pixels against 0.03 %
+elsewhere); the generator taught them as background. A non-learned line detector (oriented filters at the generator's
+own width range, an IAAFT noise null, a cluster-mass test) flagged 207 of 428 backgrounds at a precision of about one
+half, and the trainer ignored those pixels when they were unlabelled. The dose was 0.35 % of the synthetic label length.
+It read htw +0.011, roi303 −0.005, a block mean of +0.003, and the response inside the flagged regions did not rise.
+Its htw "gain" is the useful result: an arm that changes the loss on 0.022 % of the crop area beat the four controls on
+htw in all four pairs with a frame interval excluding zero. Those four controls are the four lowest of the six AA runs
+on htw, and both 59b and 60 land where the other two sit. Against all six runs the difference is +0.007–0.008 (p 0.16–
+0.28). Run-to-run sd on htw is 0.0075–0.012, so resolving +0.010 needs about nine runs per arm at the lower sd and about
+twenty-three at the higher; what catches a lucky control set is the reference (every run of the recipe), not the test; a line on the mean
+of htw and roi303 is what kept both arms from a false adoption.
+
+**Debris, and a decoder that only fills gaps (2026-11-01/02): adopted.** Looking at the off-annotation predictions by eye showed a quarter of them on htw were particles and debris, and a fifth were arcs of interference rings; the generator had only round specks. Interference rings as negatives (ARM 61) made the model stop firing on synthetic rings about twentyfold and still gained nothing, paying in short filaments. Compact debris (ARM 62: aggregates of particles with the interference profile, irregular blobs, never elongated, so that no filament-shaped negative is taught as in ARM 41) gained on both blocks and on all four seeds, and stood against all eighteen other runs of the recipe. The arm removed its target: of the predictions labelled earlier, debris fell from 0.58 to 0.32 still predicted, unannotated filaments only from 0.82 to 0.75. On crossings, 94 % of identity failures on roi303 turned out to be a broken arm whose map sits just under the operating threshold, with p above 0.95 in three quarters of the gaps. Synthetic frames rarely show this, so the fix could not be selected there; with the user's ruling it was selected on half of the VAL fields and confirmed on the other half. Admitting weak pixels near junctions raised identity but added false positives; admitting them only where they join two different components gained F1. The combined candidate read +0.022 on roi303 TEST and +0.018 on htw TEST against the previous recipe (third adaptive TEST use). The dose I first described as per 2048 px background was in fact per 640 px training crop, about ten times denser.
+
+**The reach of a link (2026-11-02): accepted after it missed the line.** The bridge of 60 px had been the top of the October grid and was never checked above it, and 22 % of the broken chains on roi303 were gaps over 60 px at a positive link score. On synthetic links 80 and 100 px tied, which selected 80. Paired on the same maps at VAL it gained roi303 +0.007 [+0.003, +0.009] and MT-34 +0.035, with htw +0.001, synth +0.005 and no added complexity; the block mean of +0.0037 missed the +0.010 line, which had been set for training arms, where run-to-run variance is the problem. The user accepted the constant after reading that, and the decision is disclosed as post-read and applies to this constant only. TEST at 80 px has not been read. Later arms (ARM 63, the ARM 62 replication) are judged at 80 px, amended before any of their outputs existed.
+
+**A thin-filament regime, and what the replication said (2026-11-02): rejected, and smaller.** htw's largest row of misses was short thin filaments, and its filaments (FWHM 2.6 px) lie almost wholly below the training support (4.6 px), so a frame-level thin regime reached that band. It gained htw +0.032 and lost roi303 -0.017 and MT-34 -0.028, and not through the recall it was built for: short recall on htw did not move, its false positives fell by a quarter. The own cut sat on the top of the 9-point grid in 5 of 8 cells, which the 09-02 protocol treats as unreliable, so one more cut was computed for arm and controls before the verdict stood; every curve falls there. The same round replicated debris on two fresh runs: same sign, smaller, about +0.01 over twelve runs against the +0.015 first reported. Half doses of both levers are the follow-up.
+
+**Halving the doses (2026-11-02): a repair that failed, and a mechanism that appeared only at half strength.** Debris had cost short curves, so half the debris was tried with a repair rule rather than a gain line: same F1, short curves back, false positives still down. It failed. Short recall barely moved on htw (0.529 with no debris, 0.478 at half, 0.485 at full), which means half a dose already carries the whole cost. The double dose was then dropped, because short recall falls with dose and more debris cannot bring it back. Half the thin regime also missed its declared rule (block mean +0.004 against +0.010, roi303 -0.0056 against a floor of -0.005), and it stays out. What it did to the anatomy is more interesting than the F1: at full dose the thin regime gained on htw through precision and left short recall flat, while at half dose the gain comes through recall, on both blocks, in the declared mechanism. Four half-dose runs against all six debris runs give recall of curves under 20 px +0.076 on htw and +0.119 on roi303, with longer curves unharmed. On roi303 the price is that the whole false-positive gain of debris is handed back, in short predictions off the annotation, for which we have no labels. This reading was post hoc and moves no verdict, but it changes what the next person should try first: debris and thin filaments appear to act as opposed dials on the model's willingness to report short structure (our inference, not a measurement), so the question for a short-curve arm is how much false-positive cost a given recall is worth, not which recipe wins on F1.
+
+**Deployment (2026-11-03): what checking the port against the research path found.** The decoder ported to the hub reproduced the research polylines exactly on all 195 VAL frames, in both environments. The check was worth running for what else it caught. It showed that the hb block had been dumped under uniform tile fusion, on the reasoning that htw is a single tile, while the 17 MT-34 frames in the same block are not. So every MT-34 number of the round was read on the wrong instrument: for the deployed model, 0.666 under uniform and 0.681 under the declared Gaussian fusion, and the two fusions even disagree on which cut MT-34 prefers. No rule read MT-34, so no verdict moved. An independent review found what the identity check could not, because each was a difference in behaviour outside the benchmark path: a decoder with no time bound under the service's single inference lock, FRAP spots that could land on a link across a gap, and the export recording the cut that was sent rather than the one applied. The first would have blocked every model for minutes on a frame the network cannot read, which is a real input in this service.
+
+**Essays follows (2026-11-03).** The batch assay moved to the same model on the user's word, with a standing rule that it always does, held by a parity test in the hub. Through the real queue on four VAL wells its curves match the research reference on every well (counts equal, p99 at most 0.43 px at 1.5x). A batch adds one thing the interactive path does not need: a table outlives the run, so each row now names its checkpoint and decoder. Essays numbers before and after the date are not comparable, and the arc-limit fallback would otherwise have been visible only in a log that dies with the container.
+
+**Stability between frames (2026-11-03): a suspect that was cleared, and the partition left standing.** The user asked whether the model is temporal, because segmentations that differ between consecutive frames break tracking. It is not. Measured on 12 unlabelled IRM videos, 20 consecutive frames each, with the production tracker, V16 is more stable than the model it replaced: 90.7 % of centerline length persists to the next frame against 89.5 %, and the length in tracks covering most of the window rose by 19 %. The first reading was far larger, +6.7 points rather than +1.2, and it was wrong: it subtracted a drift from the tracker's own `estimate_drift`, which errs by more than 3.33 px on 40 % of pairs and by 106 px at worst, on frames whose true shift never exceeds 4 px. A per-pair look caught it, an exhaustive search for the best translation confirmed it, and the natural next conclusion, that this estimator is why tracks fragment, then failed its own test: the tracker with zero drift or with the true shift gives the same tracks. What remains is the partition. The pixels mostly persist, yet only 68 % of length maps to exactly one curve in the next frame, on both models, against 81 % when the scene does not change at all. Each filament is still followed by 2.2 tracks. There is no ground truth on these videos, so none of this says which curves are right.
+
+**A temporal window without training (2026-11-03): no support, and one route closed.** The user asked for a model that decides frame t from t-1 and t+1. V16 already takes three channels and receives the same frame in all of them, so `(t-1, t, t+1)` needs no new architecture, only new data. Before paying for that, the same 12 videos went through V16 on the mean of three aligned frames, and through the decoder on the mean, the median and a foreground-matched mean of three aligned maps. Consecutive windows share two of three frames, so stability rises by construction; the read was therefore declared at lag 3, whose windows share nothing, and the trap proved real: the mean image gains +0.029 persistence at lag 1, with a confidence interval above zero, and +0.006 at lag 3, with one spanning it. The one-to-one partition did not improve in any arm: -0.004 for the mean image, and -0.09 to -0.23 for the map arms, which also delete moving filaments, because at the cut the map is a thin core that rigid alignment does not superimpose. It falls even on a static video (0.833 to 0.566-0.794), so motion is not the only cause; the screen cannot separate the thin core from L+H seeing a mask shape it was not tuned for. Map fusion, which had been suggested as the cheap first step, is closed for this model with the deployed decoder parameters. A mean is not a network and cannot learn to ignore a mover, so this withholds support from a temporal retrain rather than refuting it. The attribution says where to look instead: of 9107 places where one curve continues as two, 37 % have a break in the map, 35 % show no break within 2 native px (47 % within 3.33), and 28 % are filaments side by side. The flicker also barely grows with time, 0.677 at lag 1 and 0.663 at lag 3, so it behaves like a re-roll at each frame and not like accumulated motion.
+
+**Votes from the neighbouring frames in the link score (2026-11-04).** L+H decides every link between arc ends with a frozen score, which makes a temporal term easy to add without training: a neighbour frame votes +1 when one of its curves covers both ends and runs along the bridge, -1 when two different curves cover them, and abstains otherwise. With no neighbour it is the deployed decoder exactly, checked on every frame. The weight was chosen on held-out synthetic clips with exact truth, where F1 rose by 0.003 and tracks per object fell from 1.48 to 1.38 against an oracle 1.04, and nothing was tuned on real video. On the 12 videos the one-to-one partition at lag 3 rose by 0.026, CI [0.018, 0.034], on all 12, with length unchanged and no harm to the moving video. That is below the declared +0.03, and every weight on the ladder landed between 0.020 and 0.026, so the weight is not what limits it. A vote can only re-decide links between arcs that exist: it cannot add a filament, mend a mask away from a link or part a bundle. The tracker on every third frame, the read free of shared input, did not separate; over all frames, which share input and which is how the tool runs, tracks per filament fell from 2.09 to 2.00. Accuracy with neighbours active can only be read on synthetic clips.
+
+**Temporal input, trained (2026-11-04): it works on the generator's video and not on real video.** V16's network already takes three channels, so six runs of the V16 recipe were trained on `(t-1, t, t+1)` from a new clip generator whose frame t and target are byte-identical to the still recipe; the six existing V16 seeds were therefore its exact control. On held-out synthetic clips the temporal model is clearly better: F1 +0.029 on frames with both neighbours, 6 of 6 seeds, +0.054 when filaments are static, and tracks per object 1.46 to 1.37. On the 12 real videos it moved the one-to-one partition by +0.004, CI [-0.006, +0.013], drew 19 % less on the moving video, and on single images it lost 0.013 on htw. A neighbour on real video is not less informative, since background residuals decorrelate from frame to frame even more than on the clips. The likelier reason sits in the partition itself: even on the clips the temporal input moved it only by 0.015, and the clips are far steadier than real video for the single-frame model (0.84 against 0.68), steadier even than a real frame re-tiled (0.81). Real frames are more ambiguous in themselves, and the decoder breaks the same ambiguity differently in each frame. A cleaner map does not change that; a vote about the links does, which is why the decoder vote, +0.026 and replicated on all six seeds, is the only temporal route left standing.
+
+**The vote goes into the tool (2026-11-04, the user's decision after the read).** It missed its declared line by 0.004 and was accepted because it needs no training and harms no guard. In the hub it runs before the tracker on a video segmented through the queue, one frame at a time: the map of frame t is computed again and the neighbours' stored curves vote. Unlike the tracker, which only adds an identity, the vote rewrites geometry, so it acts only where it was measured: frames the queue has just segmented, never a frame edited or re-segmented by the user, never twice, never the first or last frame, and the route itself refuses a frame whose recomputed per-frame curves are not the ones stored. The integration was held to identity rather than to a score: on all 211 interior frames of the 12 videos the hub code returns the research curves bit for bit, and a synthetic triplet pins this in the hub's CI. The cost is one more inference per interior frame, so a video's tracks arrive later than its curves. **Deployed 2026-11-05.** On production the one open question was whether the card re-decodes a frame to exactly the curves it stored, since the bit-for-bit replay ran on the research card. It does: on a fresh synthetic video on the test account no frame was refused and the vote changed all seven interior frames. The production card does not reproduce the research card's curves bit for bit (one curve of forty differs on the test frame), and it does not need to: storing and re-decoding happen on the same card, where two runs are identical. There the vote took 26 s for seven 1-Mpx frames, more than the segmentation of the video itself.
